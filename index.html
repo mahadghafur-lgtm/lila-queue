@@ -143,6 +143,22 @@
     .reason.urgent { border-left-color: var(--tier); background: var(--tier-bg); }
     .reason.urgent .eyebrow { color: var(--tier-ink); }
 
+    /* ---- Patterns panel ---- */
+    .patterns { margin-top: 16px; }
+    .patterns > summary { cursor: pointer; list-style-position: inside; }
+    .patterns > summary .eyebrow { color: var(--maroon); font-size: 12px; }
+    .patterns-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; margin-top: 12px; }
+    .pattern { background: var(--card); border-radius: 12px; padding: 12px 14px; font-size: 14px; }
+    .pattern-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+    .pattern-head .eyebrow { color: var(--text); }
+    .pattern-count { font-weight: 600; white-space: nowrap; }
+    .pattern-line { margin: 4px 0 0; }
+    .pattern-line.minor { color: var(--text-2); font-size: 13px; }
+    .pattern-line.passed { color: var(--t1-ink); }
+    .ticket-link { color: var(--maroon); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; white-space: nowrap; }
+    .card { scroll-margin-top: 16px; }
+    .card:target { outline: 3px solid var(--t3); outline-offset: 2px; }
+
     /* ---- Footer (data checks, collapsed) ---- */
     .site-footer { max-width: 960px; margin: 24px auto 0; padding: 12px 16px 28px; color: var(--text-2); font-size: 13px; }
     .site-footer summary { cursor: pointer; }
@@ -185,6 +201,11 @@
       <p class="summary-caption muted small">Counts are by reason, so a ticket can count in more than one box. Tier headings count each ticket once, by its most urgent reason.</p>
       <p id="hidden-note" class="muted small"></p>
     </section>
+
+    <details class="panel patterns" open>
+      <summary><span class="eyebrow">Patterns</span> <span class="patterns-hint muted small">Likely shared causes, repeat customers and deadlines, worked out from the data for the picked date.</span></summary>
+      <div class="patterns-grid" id="patterns-body"></div>
+    </details>
 
     <main id="queue"></main>
   </div>
@@ -369,6 +390,10 @@ const PATTERNS = {
   stalling:        /\b(stops?|stopped|stopping|pauses?|paused|pausing|stalls?|stalled|stalling)\b|\bsince the (?:last )?update\b/i,
   earlierTickets:  /\b(\w+) earlier tickets?\b/i,                           // "Two earlier tickets"
   internalStep:    /\b(replacement|refund|repair|return)\b(?: unit)? not (allocated|shipped|approved|issued|processed)\b/i,
+  // Used only by the Patterns panel:
+  setupHelp:       /\b(setup|connect|wi-fi|onboarding)\b/i,
+  updateMention:   /\bupdate\b/i,
+  amberLight:      /\bamber\b/i,
   promise:         /\bpromised (?:a |an |the )?([a-z ]+?) by (?:[a-z]+,? )?([a-z]{3})[a-z]*\.? (\d{1,2})\b/i, // "promised a replacement by Sep 26"
 };
 
@@ -455,12 +480,12 @@ function refundReasons(ticket, caseInfo, today, result) {
   }
   if (daysLeft >= 0 && daysLeft <= 7) {
     const when = daysLeft === 0 ? "ends TODAY" : daysLeft === 1 ? "ends tomorrow" : `ends in ${daysLeft} days`;
-    return [{ kind: "refund-window", tier: 1, text: `Rule 2: refund window ${when} (${formatShortDate(windowEnd)}); ${eligible}, return not started`, sortValue: daysLeft }];
+    return [{ deadline: windowEnd, deadlineRule: 2, kind: "refund-window", tier: 1, text: `Rule 2: refund window ${when} (${formatShortDate(windowEnd)}); ${eligible}, return not started`, sortValue: daysLeft }];
   }
   if (daysLeft > 7) {
-    return [{ kind: "refund-info", tier: 5, text: `Rule 2: refund eligible; window ends ${formatShortDate(windowEnd)} (${daysLeft} days left), return not started` }];
+    return [{ deadline: windowEnd, deadlineRule: 2, kind: "refund-info", tier: 5, text: `Rule 2: refund eligible; window ends ${formatShortDate(windowEnd)} (${daysLeft} days left), return not started` }];
   }
-  return [{ kind: "refund-info", tier: 5, text: `Rule 2: refund still eligible (${eligible} that ended ${formatShortDate(windowEnd)}); return not started` }];
+  return [{ deadline: windowEnd, deadlineRule: 2, kind: "refund-info", tier: 5, text: `Rule 2: refund still eligible (${eligible} that ended ${formatShortDate(windowEnd)}); return not started` }];
 }
 
 // Rule 3: a carrier damage claim must be filed within 14 days of delivery.
@@ -481,7 +506,8 @@ function carrierClaimReasons(ticket, today) {
   else                     text = `Rule 3: carrier claim deadline PASSED ${-daysLeft} days ago (${date})`;
   text += "; claim not filed yet";
 
-  return daysLeft <= 7 ? [{ kind: "claim-deadline", tier: 1, text, sortValue: daysLeft }] : [{ kind: "claim-deadline", tier: 5, text }];
+  // deadline / deadlineRule are read by the Patterns panel; they do not affect the tier.
+  return daysLeft <= 7 ? [{ deadline: deadline, deadlineRule: 3, kind: "claim-deadline", tier: 1, text, sortValue: daysLeft }] : [{ deadline: deadline, deadlineRule: 3, kind: "claim-deadline", tier: 5, text }];
 }
 
 // A promised date in the issue text that has passed (not a house rule).
@@ -833,6 +859,7 @@ function renderTicket(item, isLinked, leadId) {
   const isResolved = item.tier === RESOLVED_TIER;
   const card = el("article", undefined, `ticket card tier-${item.tier}` + (isLinked ? " linked" : "") + (isResolved ? " resolved" : ""));
   card.dataset.ticketId = t.ticket_id;
+  card.id = `ticket-${t.ticket_id}`; // target for the Patterns panel links
   card.dataset.tier = item.tier;
 
   // Top line
@@ -1009,8 +1036,155 @@ function renderQueue() {
   });
 
   renderSummary(cases);
+  renderPatterns(cases);
   document.getElementById("hidden-note").textContent = hiddenCount === 0 ? ""
     : `${plural(hiddenCount, "ticket")} not yet opened`;
+}
+
+// ---------------------------------------------------------------------------
+// PATTERNS PANEL
+// Everything here is worked out from the visible tickets (opened on or before
+// the picked date) each time the queue is drawn. No ticket IDs are hard-coded.
+// ---------------------------------------------------------------------------
+
+// A ticket ID that scrolls to its card when clicked.
+function ticketLink(id) {
+  const link = el("a", id, "ticket-link");
+  link.href = `#ticket-${id}`;
+  return link;
+}
+
+// One line of text made of strings and ticket links ({ id: ticketId }).
+function patternLine(parts, className) {
+  const line = el("p", undefined, "pattern-line" + (className ? ` ${className}` : ""));
+  parts.forEach(part => line.append(typeof part === "string" ? part : ticketLink(part.id)));
+  return line;
+}
+
+// A cluster box with a title and a count.
+function patternBlock(title, countText) {
+  const block = el("section", undefined, "pattern");
+  const head = el("div", undefined, "pattern-head");
+  head.append(el("span", title, "eyebrow"), el("span", countText, "pattern-count"));
+  block.appendChild(head);
+  return block;
+}
+
+// The first sentence of a text that matches a pattern, or the first sentence.
+function sentenceMatching(text, pattern) {
+  const sentences = text.split(/(?<=\.)\s+/);
+  return sentences.find(s => pattern.test(s)) || sentences[0] || "";
+}
+
+// "<ID> <customer>, <ID> <customer>" as line parts; resolved tickets say so.
+function ticketListParts(items, describe) {
+  const parts = [];
+  items.forEach((item, index) => {
+    if (index > 0) parts.push(", ");
+    parts.push({ id: item.ticket.ticket_id });
+    parts.push(` ${describe(item)}`);
+    if (item.tier === RESOLVED_TIER) parts.push(" (resolved)");
+  });
+  return parts;
+}
+
+const byTicketId = (a, b) => a.ticket.ticket_id.localeCompare(b.ticket.ticket_id);
+
+// 1) Possible firmware issue: firmware 2.4.1 AND stalling words.
+function firmwarePattern(items) {
+  const cluster = items.filter(i => i.firmwareIssue).sort(byTicketId);
+  const on241 = items.filter(i => i.ticket.firmware === "2.4.1");
+  const others = items.filter(i => i.ticket.firmware !== "2.4.1");
+  const othersStalling = others.filter(i => PATTERNS.stalling.test(i.ticket.issue));
+
+  const block = patternBlock("Possible firmware issue", plural(cluster.length, "ticket"));
+  if (cluster.length === 0) { block.appendChild(patternLine(["None."], "minor")); return block; }
+
+  block.appendChild(patternLine(ticketListParts(cluster, i => i.ticket.customer)));
+  block.appendChild(patternLine([
+    `${cluster.length} of ${plural(on241.length, "ticket")} on firmware 2.4.1 report stalls or pauses; ` +
+    `${othersStalling.length} of ${plural(others.length, "ticket")} on other firmware do.`,
+  ]));
+
+  items.filter(i => PATTERNS.updateMention.test(i.ticket.issue)).sort(byTicketId).forEach(i => {
+    block.appendChild(patternLine([{ id: i.ticket.ticket_id }, `: “${sentenceMatching(i.ticket.issue, PATTERNS.updateMention)}”`], "minor"));
+  });
+
+  const notInCluster = on241.filter(i => !i.firmwareIssue).sort(byTicketId);
+  if (notInCluster.length) {
+    const parts = ["Also on 2.4.1 but no stalling words, so not counted: "];
+    notInCluster.forEach((i, index) => {
+      if (index > 0) parts.push("; ");
+      parts.push({ id: i.ticket.ticket_id }, ` “${sentenceMatching(i.ticket.issue, /./)}”`);
+    });
+    block.appendChild(patternLine(parts, "minor"));
+  }
+
+  const amberOnly = items.filter(i => !i.firmwareIssue && PATTERNS.amberLight.test(i.ticket.issue)).sort(byTicketId);
+  amberOnly.forEach(i => {
+    block.appendChild(patternLine([
+      "Watch: ", { id: i.ticket.ticket_id }, ` (firmware ${i.ticket.firmware}) reports an amber light but no stalls, so it is not in this cluster.`,
+    ], "minor"));
+  });
+  return block;
+}
+
+// 2) Repeat customers: more than one ticket in the data.
+function repeatPattern(cases) {
+  const repeats = cases.filter(group => group.items.length > 1);
+  const block = patternBlock("Repeat customers", plural(repeats.length, "customer"));
+  if (repeats.length === 0) { block.appendChild(patternLine(["None."], "minor")); return block; }
+
+  repeats.forEach(group => {
+    const items = [...group.items].sort(byTicketId);
+    const parts = [`${items[0].ticket.customer}: ${plural(items.length, "ticket")} (`];
+    items.forEach((item, index) => { if (index > 0) parts.push(", "); parts.push({ id: item.ticket.ticket_id }); });
+    parts.push(")");
+    const earlier = group.caseInfo.earlierTickets;
+    if (earlier > 0) parts.push(`; notes mention ${plural(earlier, "earlier ticket")} not in the data`);
+    block.appendChild(patternLine(parts));
+  });
+  return block;
+}
+
+// 3) New-customer setup help: setup, connect, Wi-Fi or onboarding (whole words).
+function setupPattern(items) {
+  const matches = items.filter(i => PATTERNS.setupHelp.test(i.ticket.issue)).sort(byTicketId);
+  const block = patternBlock("New-customer setup help", plural(matches.length, "ticket"));
+  if (matches.length === 0) { block.appendChild(patternLine(["None."], "minor")); return block; }
+
+  matches.forEach(i => {
+    const delivered = parseIsoDate(i.ticket.delivered);
+    const since = delivered ? `delivered ${plural(daysBetween(delivered, today), "day")} ago` : "no delivery date";
+    block.appendChild(patternLine([{ id: i.ticket.ticket_id }, ` ${i.ticket.customer} · ${since}` + (i.tier === RESOLVED_TIER ? " (resolved)" : "")]));
+  });
+  return block;
+}
+
+// 4) Rule 2 and Rule 3 deadlines within 7 days, plus any that passed in the last 3 days.
+function deadlinePattern(items) {
+  const entries = items
+    .filter(i => i.tier !== RESOLVED_TIER)
+    .flatMap(i => i.reasons.filter(r => r.deadline).map(r => ({ item: i, rule: r.deadlineRule, date: r.deadline, daysLeft: daysBetween(today, r.deadline) })))
+    .filter(e => e.daysLeft >= -3 && e.daysLeft <= 7)
+    .sort((a, b) => a.daysLeft - b.daysLeft || a.item.ticket.ticket_id.localeCompare(b.item.ticket.ticket_id));
+
+  const block = patternBlock("Deadlines in the next 7 days", String(entries.length));
+  if (entries.length === 0) block.appendChild(patternLine(["None."], "minor"));
+  entries.forEach(e => {
+    const what = e.rule === 3 ? "Rule 3: carrier claim" : "Rule 2: refund window ends";
+    const d = e.daysLeft;
+    const when = d > 1 ? `in ${d} days` : d === 1 ? "tomorrow" : d === 0 ? "today" : `passed ${plural(-d, "day")} ago`;
+    block.appendChild(patternLine([{ id: e.item.ticket.ticket_id }, ` · ${what} · ${formatShortDate(e.date)} · ${when}`], d < 0 ? "passed" : ""));
+  });
+  block.appendChild(patternLine(["Also lists deadlines that passed in the last 3 days. Resolved tickets are left out."], "minor"));
+  return block;
+}
+
+function renderPatterns(cases) {
+  const items = cases.flatMap(group => group.items); // visible tickets, resolved included
+  const body = document.getElementById("patterns-body");
+  body.replaceChildren(firmwarePattern(items), repeatPattern(cases), setupPattern(items), deadlinePattern(items));
 }
 
 function renderStorageNote() {
