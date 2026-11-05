@@ -4,11 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>LILA Monday Queue</title>
-  <!-- Slice 1: skeleton and data only. Styling comes in a later slice. -->
+  <!-- Slice 2: priority logic. Only basic readability styling; the design comes in a later slice. -->
   <style>
-    body { font-family: system-ui, sans-serif; margin: 16px; }
-    table { border-collapse: collapse; }
-    th, td { border: 1px solid #ccc; padding: 4px 6px; text-align: left; vertical-align: top; }
+    body { font-family: system-ui, sans-serif; margin: 16px; max-width: 900px; line-height: 1.4; }
+    .ticket { border: 1px solid #ccc; padding: 8px 10px; margin: 8px 0; }
+    .case { border-left: 4px solid #999; padding-left: 8px; margin: 12px 0; }
+    .linked { margin-left: 24px; }
+    .muted { color: #666; }
+    ul { margin: 4px 0; padding-left: 20px; }
   </style>
 </head>
 <body>
@@ -22,14 +25,9 @@
   </header>
 
   <p id="data-checks"></p>
+  <p id="hidden-note" class="muted"></p>
 
-  <main>
-    <h2>Tickets (<span id="ticket-count">0</span>)</h2>
-    <table>
-      <thead><tr id="ticket-head"></tr></thead>
-      <tbody id="ticket-body"></tbody>
-    </table>
-  </main>
+  <main id="queue"></main>
 
 <script>
 // ---------------------------------------------------------------------------
@@ -112,7 +110,7 @@ function rowsToTickets(rows) {
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-// Builds a date from parts. month is 1-12.
+// Builds a date from parts. month is 1-12. Day overflow rolls over (Sep 31 -> Oct 1).
 function makeDate(year, month, day) {
   return new Date(year, month - 1, day);
 }
@@ -139,6 +137,322 @@ function formatLongDate(date) {
   return `${WEEKDAYS[date.getDay()]}, ${MONTHS[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
 }
 
+// Date -> "Oct 5".
+function formatShortDate(date) {
+  return `${MONTHS[date.getMonth()]} ${date.getDate()}`;
+}
+
+// Date -> "Mon Oct 5".
+function formatDayDate(date) {
+  return `${WEEKDAYS[date.getDay()].slice(0, 3)} ${formatShortDate(date)}`;
+}
+
+// A whole-day counter that ignores clock changes, used to compare and subtract dates.
+function dayNumber(date) {
+  return Math.round(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / 86400000);
+}
+
+function addDays(date, days) {
+  return makeDate(date.getFullYear(), date.getMonth() + 1, date.getDate() + days);
+}
+
+// Calendar days from one date to another (negative if "to" is earlier).
+function daysBetween(from, to) {
+  return dayNumber(to) - dayNumber(from);
+}
+
+// Business days are Monday to Friday. Holidays are ignored.
+function isBusinessDay(date) {
+  const weekday = date.getDay();
+  return weekday >= 1 && weekday <= 5;
+}
+
+// The first business day after a date (Fri, Sat or Sun -> Monday).
+function nextBusinessDay(date) {
+  let day = addDays(date, 1);
+  while (!isBusinessDay(day)) day = addDays(day, 1);
+  return day;
+}
+
+// Business days after "start", up to and including "end".
+function businessDaysAfter(start, end) {
+  let count = 0;
+  for (let day = addDays(start, 1); dayNumber(day) <= dayNumber(end); day = addDays(day, 1)) {
+    if (isBusinessDay(day)) count++;
+  }
+  return count;
+}
+
+// "1 day", "6 days".
+function plural(count, word) {
+  return `${count} ${word}${count === 1 ? "" : "s"}`;
+}
+
+// ---------------------------------------------------------------------------
+// TEXT PATTERNS
+// The words the rules look for in the issue and notes. Edit these to tune
+// what counts as, say, damage or stalling. \b means "whole word".
+// ---------------------------------------------------------------------------
+const PATTERNS = {
+  refund:          /\brefunds?\b/i,
+  damage:          /\b(crushed|cracked|damaged|dented|broken|smashed)\b/i,
+  carrierClaim:    /\bcarrier claim\b/i,
+  claimFiled:      /\bclaim (?:was |has been |is )?filed\b/i,               // "claim not filed" does NOT match
+  returnStarted:   /\b(sent (?:the unit|it) back|reached the warehouse|return label sent|unit returned)\b/i,
+  stalling:        /\b(stops?|stopped|stopping|pauses?|paused|pausing|stalls?|stalled|stalling)\b|\bsince the (?:last )?update\b/i,
+  earlierTickets:  /\b(\w+) earlier tickets?\b/i,                           // "Two earlier tickets"
+  internalStep:    /\b(replacement|refund|repair|return)\b(?: unit)? not (allocated|shipped|approved|issued|processed)\b/i,
+  promise:         /\bpromised (?:a |an |the )?([a-z ]+?) by (?:[a-z]+,? )?([a-z]{3})[a-z]*\.? (\d{1,2})\b/i, // "promised a replacement by Sep 26"
+  blockedStatus:   /^waiting on (warehouse|carrier|engineering)$/i,
+};
+
+const NUMBER_WORDS = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+const NUMBER_NAMES = ["Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten"];
+
+// ---------------------------------------------------------------------------
+// PRIORITY LOGIC
+// Each rule below returns zero or more "reasons": { tier, text, sortValue }.
+// A ticket's tier is its most urgent reason. sortValue orders tickets inside
+// a tier: lower comes first (days left for tier 1, minus days late for tier 2,
+// minus days blocked for tier 3).
+// ---------------------------------------------------------------------------
+const TIER_NAMES = {
+  1: "Tier 1: Deadline about to expire",
+  2: "Tier 2: Customer let down",
+  3: "Tier 3: Blocked on someone else",
+  4: "Tier 4: Reply due today",
+  5: "Tier 5: On track",
+  6: "Resolved",
+};
+const RESOLVED_TIER = 6;
+
+// Rule 1: every customer gets a reply within 1 business day.
+function replyReasons(ticket, today) {
+  const last = parseIsoDate(ticket.last_reply_date);
+  if (!last) return [{ tier: 5, text: "Rule 1: no last reply date in the data" }];
+  if (dayNumber(last) > dayNumber(today)) {
+    return [{ tier: 5, text: `Rule 1: last reply date (${formatShortDate(last)}) is after today, so it is ignored` }];
+  }
+  if (ticket.last_reply_from !== "customer") {
+    return [{ tier: 5, text: `Rule 1: no reply owed (we replied last, ${formatShortDate(last)})` }];
+  }
+
+  const due = nextBusinessDay(last);
+  if (dayNumber(today) < dayNumber(due)) {
+    return [{ tier: 5, text: `Rule 1: reply due ${formatDayDate(due)}` }];
+  }
+  if (dayNumber(today) === dayNumber(due)) {
+    return [{ tier: 4, text: `Rule 1: reply due today (${formatShortDate(due)})` }];
+  }
+  const late = businessDaysAfter(due, today);
+  const text = late === 0
+    ? `Rule 1: reply overdue (due ${formatDayDate(due)}); 0 business days late so far because today is a weekend`
+    : `Rule 1: reply ${plural(late, "business day")} late (due ${formatShortDate(due)})`;
+  return [{ tier: 2, text, sortValue: -late }];
+}
+
+// Rule 2: refunds for 30 days after delivery, judged by the date the customer asked.
+// Also sets ticket.needsManager when the request came after the window.
+function refundReasons(ticket, caseInfo, today, result) {
+  const delivered = parseIsoDate(ticket.delivered);
+  if (!PATTERNS.refund.test(ticket.issue) || !delivered) return [];
+
+  const windowEnd = addDays(delivered, 30);
+  const requested = caseInfo.earliestOpened; // assumption: earliest ticket in the case (see Assumption line)
+
+  if (dayNumber(requested) > dayNumber(windowEnd)) {
+    result.needsManager = true;
+    return [{ tier: 5, text: `Rule 2: refund asked for on ${formatShortDate(requested)}, after the 30-day window ended ${formatShortDate(windowEnd)}. Manager decision needed; do not offer a refund.` }];
+  }
+
+  const started = ticket.status === "waiting on warehouse" ||
+    PATTERNS.returnStarted.test(ticket.issue) || PATTERNS.returnStarted.test(ticket.notes);
+  const daysLeft = daysBetween(today, windowEnd);
+  const eligible = `requested ${formatShortDate(requested)}, inside the window`;
+
+  if (started) {
+    return [{ tier: 5, text: `Rule 2: refund eligible (${eligible} ending ${formatShortDate(windowEnd)}); return already started` }];
+  }
+  if (daysLeft >= 0 && daysLeft <= 7) {
+    const when = daysLeft === 0 ? "ends TODAY" : daysLeft === 1 ? "ends tomorrow" : `ends in ${daysLeft} days`;
+    return [{ tier: 1, text: `Rule 2: refund window ${when} (${formatShortDate(windowEnd)}); ${eligible}, return not started`, sortValue: daysLeft }];
+  }
+  if (daysLeft > 7) {
+    return [{ tier: 5, text: `Rule 2: refund eligible; window ends ${formatShortDate(windowEnd)} (${daysLeft} days left), return not started` }];
+  }
+  return [{ tier: 5, text: `Rule 2: refund still eligible (${eligible} that ended ${formatShortDate(windowEnd)}); return not started` }];
+}
+
+// Rule 3: a carrier damage claim must be filed within 14 days of delivery.
+function carrierClaimReasons(ticket, today) {
+  const delivered = parseIsoDate(ticket.delivered);
+  const isDamage = PATTERNS.damage.test(ticket.issue) || PATTERNS.carrierClaim.test(ticket.notes);
+  if (!delivered || !isDamage) return [];
+  if (PATTERNS.claimFiled.test(ticket.notes)) return [{ tier: 5, text: "Rule 3: carrier claim filed" }];
+
+  const deadline = addDays(delivered, 14);
+  const daysLeft = daysBetween(today, deadline);
+  const date = formatShortDate(deadline);
+  let text;
+  if (daysLeft > 1)        text = `Rule 3: carrier claim deadline is in ${daysLeft} days (${date})`;
+  else if (daysLeft === 1) text = `Rule 3: carrier claim deadline is tomorrow (${date})`;
+  else if (daysLeft === 0) text = `Rule 3: carrier claim closes TODAY (${date})`;
+  else if (daysLeft === -1) text = `Rule 3: carrier claim deadline PASSED yesterday (${date})`;
+  else                     text = `Rule 3: carrier claim deadline PASSED ${-daysLeft} days ago (${date})`;
+  text += "; claim not filed yet";
+
+  return daysLeft <= 7 ? [{ tier: 1, text, sortValue: daysLeft }] : [{ tier: 5, text }];
+}
+
+// A promised date in the issue text that has passed (not a house rule).
+function promiseReasons(ticket, today) {
+  const match = PATTERNS.promise.exec(ticket.issue);
+  const opened = parseIsoDate(ticket.opened);
+  if (!match || !opened) return [];
+  const month = MONTHS.findIndex(m => m.toLowerCase() === match[2].toLowerCase());
+  if (month < 0) return [];
+
+  const thing = match[1].trim();
+  const promised = makeDate(opened.getFullYear(), month + 1, Number(match[3])); // year taken from the opened date
+  if (dayNumber(today) <= dayNumber(promised)) {
+    return [{ tier: 5, text: `Promise: ${thing} promised by ${formatDayDate(promised)} (not passed yet)` }];
+  }
+  // Late days start on the first business day after the promise (a Saturday promise counts from Monday).
+  const late = businessDaysAfter(promised, today);
+  const countedFrom = isBusinessDay(promised) ? "" : ` (counted from ${formatDayDate(nextBusinessDay(promised))})`;
+  return [{ tier: 2, text: `Promise missed: ${thing} promised by ${formatDayDate(promised)}; ${plural(late, "business day")} late${countedFrom}`, sortValue: -late }];
+}
+
+// Blocked on someone else. Only names an owner when the status states one.
+function blockedReasons(ticket, today) {
+  const ownerMatch = PATTERNS.blockedStatus.exec(ticket.status);
+  const stepMatch = PATTERNS.internalStep.exec(ticket.notes);
+  if (!ownerMatch && !stepMatch) return [];
+
+  // How long blocked: since the last update in the data, else since the ticket opened.
+  const lastReply = parseIsoDate(ticket.last_reply_date);
+  const useReply = lastReply && dayNumber(lastReply) <= dayNumber(today);
+  const since = useReply ? lastReply : parseIsoDate(ticket.opened);
+  const days = Math.max(0, daysBetween(since, today));
+  const duration = `${plural(days, "day")} since ${useReply ? "last update" : "the ticket opened"} (${formatShortDate(since)})`;
+
+  let text;
+  if (ownerMatch) {
+    const owner = ownerMatch[1].toLowerCase();
+    text = `Blocked on ${owner} (status: ${ticket.status}), ${duration}.`;
+    if (owner === "warehouse" && PATTERNS.refund.test(ticket.issue)) {
+      text += " Rule 4: the refund is paid only after the warehouse confirms the returned unit arrived.";
+    }
+  } else {
+    text = `Blocked: ${stepMatch[1].toLowerCase()} not ${stepMatch[2].toLowerCase()} (owner not stated in the data). ${duration[0].toUpperCase()}${duration.slice(1)}.`;
+  }
+  return [{ tier: 3, text, sortValue: -days }];
+}
+
+// Possible firmware issue: firmware 2.4.1 AND stalling words. Never on firmware or amber light alone.
+function hasFirmwareIssue(ticket) {
+  return ticket.firmware === "2.4.1" && PATTERNS.stalling.test(ticket.issue);
+}
+
+// Earlier tickets mentioned in the notes ("Two earlier tickets ..."), or 0.
+function earlierTicketCount(ticket) {
+  const match = PATTERNS.earlierTickets.exec(ticket.notes);
+  if (!match) return 0;
+  const word = match[1].toLowerCase();
+  return NUMBER_WORDS[word] ?? (Number(word) || 1);
+}
+
+// ---------------------------------------------------------------------------
+// CASES
+// Tickets from the same customer are treated as one case (same name in the
+// data). The case is ranked by its most urgent ticket.
+// ---------------------------------------------------------------------------
+function buildCases(visibleTickets) {
+  const byCustomer = new Map();
+  visibleTickets.forEach(ticket => {
+    const key = ticket.customer.trim().toLowerCase();
+    if (!byCustomer.has(key)) byCustomer.set(key, []);
+    byCustomer.get(key).push(ticket);
+  });
+
+  return [...byCustomer.values()].map(members => ({
+    members,
+    earliestOpened: members.map(t => parseIsoDate(t.opened)).sort((a, b) => dayNumber(a) - dayNumber(b))[0],
+    earlierTickets: Math.max(...members.map(earlierTicketCount)),
+  }));
+}
+
+// Works out every reason, the tier and the flags for one ticket.
+function analyseTicket(ticket, caseInfo, today) {
+  const result = { ticket, caseInfo, needsManager: false };
+  const reasons = [
+    ...carrierClaimReasons(ticket, today),
+    ...refundReasons(ticket, caseInfo, today, result),
+    ...replyReasons(ticket, today),
+    ...promiseReasons(ticket, today),
+    ...blockedReasons(ticket, today),
+  ];
+  reasons.sort((a, b) => a.tier - b.tier);
+
+  if (ticket.status === "resolved") {
+    result.tier = RESOLVED_TIER;
+    result.sortKey = 0;
+  } else {
+    result.tier = Math.min(5, ...reasons.map(r => r.tier));
+    const inTier = reasons.filter(r => r.tier === result.tier && r.sortValue !== undefined);
+    result.sortKey = inTier.length ? Math.min(...inTier.map(r => r.sortValue)) : 0;
+  }
+  result.reasons = reasons;
+
+  const lastReply = parseIsoDate(ticket.last_reply_date);
+  const lastFromCustomer = ticket.last_reply_from === "customer" && lastReply && dayNumber(lastReply) <= dayNumber(today);
+  result.lastCustomerDay = lastFromCustomer ? dayNumber(lastReply) : Infinity;
+
+  result.linkedIds = caseInfo.members.filter(t => t !== ticket).map(t => t.ticket_id);
+  result.isRepeat = result.linkedIds.length > 0 || earlierTicketCount(ticket) > 0;
+  result.firmwareIssue = hasFirmwareIssue(ticket);
+  return result;
+}
+
+// Order inside the queue: tier, then the tier's own sort, then the tie-breaks
+// from CLAUDE.md (repeat customers, oldest last customer message, ticket ID).
+function compareTickets(a, b) {
+  if (a.tier !== b.tier) return a.tier - b.tier;
+  if (a.sortKey !== b.sortKey) return a.sortKey - b.sortKey;
+  if (a.isRepeat !== b.isRepeat) return a.isRepeat ? -1 : 1;
+  if (a.lastCustomerDay !== b.lastCustomerDay) return a.lastCustomerDay - b.lastCustomerDay;
+  return a.ticket.ticket_id.localeCompare(b.ticket.ticket_id);
+}
+
+// Builds the queue for a given "today": hides future tickets, groups cases,
+// and sorts cases by their most urgent ticket.
+function buildQueue(allTickets, today) {
+  const visible = allTickets.filter(t => {
+    const opened = parseIsoDate(t.opened);
+    return !opened || dayNumber(opened) <= dayNumber(today);
+  });
+  const hiddenCount = allTickets.length - visible.length;
+
+  const cases = buildCases(visible).map(caseInfo => {
+    const items = caseInfo.members.map(t => analyseTicket(t, caseInfo, today)).sort(compareTickets);
+    caseInfo.needsManager = items.some(item => item.needsManager);
+    return { caseInfo, items, lead: items[0] };
+  });
+  cases.sort((a, b) => compareTickets(a.lead, b.lead));
+  return { cases, hiddenCount };
+}
+
+// The Assumption line for a case flagged "Needs manager decision", built from the data.
+function assumptionText(caseInfo) {
+  let text = `Assumption: refund request date taken from earliest ticket in the data (${formatShortDate(caseInfo.earliestOpened)}).`;
+  const count = caseInfo.earlierTickets;
+  if (count > 0) {
+    const name = NUMBER_NAMES[count] || String(count);
+    text += ` ${name} earlier ${count === 1 ? "ticket is" : "tickets are"} not in the data; check their dates.`;
+  }
+  return text;
+}
+
 // ---------------------------------------------------------------------------
 // APP STATE
 // ---------------------------------------------------------------------------
@@ -149,35 +463,79 @@ let today = parseIsoDate(DEFAULT_TODAY);
 // RENDERING
 // textContent is used everywhere so ticket text can never inject HTML.
 // ---------------------------------------------------------------------------
+
+// Small helper: makes an element with optional text and class.
+function el(tag, text, className) {
+  const node = document.createElement(tag);
+  if (text !== undefined) node.textContent = text;
+  if (className) node.className = className;
+  return node;
+}
+
 function renderToday() {
   document.getElementById("today-picker").value = toIsoDate(today);
   document.getElementById("today-label").textContent = formatLongDate(today);
 }
 
-function renderTickets() {
-  const columns = Object.keys(tickets[0] || {});
-  const head = document.getElementById("ticket-head");
-  const body = document.getElementById("ticket-body");
-  head.replaceChildren();
-  body.replaceChildren();
+// One ticket: header line, issue, notes, details, flags and reasons.
+function renderTicket(item, isLinked) {
+  const t = item.ticket;
+  const box = el("div", undefined, "ticket" + (isLinked ? " linked" : ""));
+  box.dataset.ticketId = t.ticket_id;
+  box.dataset.tier = item.tier;
 
-  columns.forEach(name => {
-    const th = document.createElement("th");
-    th.textContent = name;
-    head.appendChild(th);
+  const title = `${t.ticket_id} · ${t.customer} · ${TIER_NAMES[item.tier]}` + (isLinked ? ` · linked to ${item.linkedIds.join(", ")}` : "");
+  box.appendChild(el("strong", title));
+  box.appendChild(el("div", `Issue: ${t.issue}`));
+  box.appendChild(el("div", `Notes: ${t.notes}`)); // blank notes stay blank
+  box.appendChild(el("div",
+    `Status: ${t.status} · opened ${t.opened} · delivered ${t.delivered} · ${t.country} · firmware ${t.firmware} · last reply from ${t.last_reply_from} on ${t.last_reply_date}`,
+    "muted"));
+
+  const flags = [];
+  if (item.isRepeat) {
+    flags.push(item.linkedIds.length ? `Repeat customer (linked: ${item.linkedIds.join(", ")})` : "Repeat customer (notes mention earlier tickets)");
+  }
+  if (item.needsManager) flags.push("Needs manager decision");
+  if (item.firmwareIssue) flags.push("Possible firmware issue");
+  if (flags.length) box.appendChild(el("div", `Flags: ${flags.join(" · ")}`));
+
+  box.appendChild(el("div", "Reasons:"));
+  const list = el("ul");
+  item.reasons.forEach(reason => list.appendChild(el("li", reason.text)));
+  box.appendChild(list);
+  return box;
+}
+
+// A case: its lead ticket, then the other tickets in the case directly below.
+function renderCase(group) {
+  const items = group.items;
+  if (items.length === 1 && !group.caseInfo.needsManager) return renderTicket(items[0], false);
+
+  const wrapper = el("div", undefined, "case");
+  wrapper.dataset.caseIds = items.map(i => i.ticket.ticket_id).join(",");
+  if (items.length > 1) {
+    wrapper.appendChild(el("div", `Case: ${items[0].ticket.customer} (${items.map(i => i.ticket.ticket_id).join(", ")}), ranked by ${items[0].ticket.ticket_id}`, "muted"));
+  }
+  if (group.caseInfo.needsManager) wrapper.appendChild(el("div", assumptionText(group.caseInfo)));
+  items.forEach((item, index) => wrapper.appendChild(renderTicket(item, index > 0)));
+  return wrapper;
+}
+
+function renderQueue() {
+  const { cases, hiddenCount } = buildQueue(tickets, today);
+  const queue = document.getElementById("queue");
+  queue.replaceChildren();
+
+  Object.keys(TIER_NAMES).map(Number).forEach(tier => {
+    const inTier = cases.filter(group => group.lead.tier === tier);
+    queue.appendChild(el("h2", `${TIER_NAMES[tier]} (${inTier.length})`));
+    if (inTier.length === 0) queue.appendChild(el("p", "None.", "muted"));
+    inTier.forEach(group => queue.appendChild(renderCase(group)));
   });
 
-  tickets.forEach(ticket => {
-    const tr = document.createElement("tr");
-    columns.forEach(name => {
-      const td = document.createElement("td");
-      td.textContent = ticket[name]; // always a string, "" when blank
-      tr.appendChild(td);
-    });
-    body.appendChild(tr);
-  });
-
-  document.getElementById("ticket-count").textContent = tickets.length;
+  document.getElementById("hidden-note").textContent = hiddenCount === 0 ? ""
+    : `${plural(hiddenCount, "ticket")} not yet opened`;
 }
 
 // ---------------------------------------------------------------------------
@@ -208,10 +566,11 @@ document.getElementById("today-picker").addEventListener("change", event => {
   const picked = parseIsoDate(event.target.value);
   if (picked) today = picked; // ignore a cleared or invalid picker
   renderToday();
+  renderQueue();
 });
 
 renderToday();
-renderTickets();
+renderQueue();
 runDataChecks();
 </script>
 </body>
