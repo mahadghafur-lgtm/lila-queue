@@ -1232,99 +1232,108 @@ function monthName(text) {
 const WAREHOUSE_ARRIVAL = /\breached (?:the |our )?warehouse on ([a-z]{3})[a-z]*\.? (\d{1,2})\b/i;
 
 // Builds the draft for a whole case (linked tickets get one reply) as paragraphs.
+// Wording is the owner's. Statements about the software update or a downgrade
+// are NOT in the ticket data, so any draft that makes them starts with a
+// [confirm with engineering before sending] placeholder (Copy stays blocked).
 function buildDraft(group) {
   const items = group.items;
-  const ids = items.map(i => i.ticket.ticket_id).sort();
   const firstName = items[0].ticket.customer.split(" ")[0];
   const hasKind = kind => items.some(i => i.reasons.some(r => r.kind === kind));
   const needsManager = items.some(i => i.needsManager);
-  const ref = ids.length > 1 ? `tickets ${ids.slice(0, -1).join(", ")} and ${ids[ids.length - 1]}` : `ticket ${ids[0]}`;
   const replyBy = formatDayDate(nextBusinessDay(today));
-  const paragraphs = [`Hi ${firstName},`];
+  const body = [];
 
-  // Opening, chosen from who wrote last (last_reply_from):
-  //  - the customer: apologise if our reply is overdue, otherwise thank them;
-  //  - us: apologise for the wait and give an update (never "thank you for your message").
+  // Opening, chosen from who wrote last (last_reply_from) and whether Rule 1 is overdue.
   const customerWroteLast = items.some(i => i.lastCustomerDay !== Infinity);
-  const overdue = items.filter(i => i.reasons.some(r => r.kind === "reply-overdue"))
-    .sort((a, b) => a.lastCustomerDay - b.lastCustomerDay)[0];
+  const overdue = hasKind("reply-overdue");
+  const warehouseRefund = !needsManager && items.find(i => i.ticket.status === "waiting on warehouse" && PATTERNS.refund.test(i.ticket.issue));
   let opening;
-  if (customerWroteLast && overdue) {
-    const wrote = parseIsoDate(overdue.ticket.last_reply_date);
-    opening = /\bfollow(?:ing|ed)? up\b/i.test(overdue.ticket.issue)
-      ? `I'm sorry for our slow reply on ${ref}. You followed up on ${formatShortDate(wrote)} and we didn't answer.`
-      : `I'm sorry for our slow reply on ${ref}. You wrote on ${formatShortDate(wrote)} and should have heard from us by ${formatShortDate(nextBusinessDay(wrote))}.`;
-  } else if (customerWroteLast) {
-    opening = `Thank you for your message about ${ref}.`;
+  if (needsManager)          opening = "Thank you for your message. I'm sorry your unit isn't working.";
+  else if (warehouseRefund)  opening = "Thank you for your patience. I'm sorry for the wait on your request.";
+  else if (!customerWroteLast) opening = "Thank you for your patience.";
+  else if (overdue)          opening = "Thank you for your message, and for accepting my apologies for the delay.";
+  else                       opening = "Thank you for your message.";
+
+  let answered = false; // did any template below answer the customer?
+
+  // Manager decision (Rule 2): state the rule, never offer or approve a refund.
+  if (needsManager) {
+    const refundTicket = items.find(i => PATTERNS.refund.test(i.ticket.issue) && parseIsoDate(i.ticket.delivered));
+    const windowEnd = addDays(parseIsoDate(refundTicket.ticket.delivered), 30);
+    body.push(`${opening} Our refund window is 30 days from delivery and yours ended on ${formatShortDate(windowEnd)}, so I can't promise a refund myself. ` +
+      `After that window, warranty covers repair or replacement. I'm raising your request with my manager and will get back to you by ${replyBy}.`);
+    answered = true;
   } else {
-    opening = `I'm sorry for the wait on ${ref}. Here's an update.`;
+    body.push(opening);
   }
-  // Earlier tickets named in the notes (e.g. "Two earlier tickets were closed with 'restart the unit'").
-  const earlierCount = Math.max(...items.map(i => earlierTicketCount(i.ticket)));
-  if (earlierCount > 0) {
-    const noteWithEarlier = items.find(i => earlierTicketCount(i.ticket) > 0).ticket.notes;
-    const advice = /'([^']+)'/.exec(noteWithEarlier);
-    const count = (NUMBER_NAMES[earlierCount] || String(earlierCount)).toLowerCase();
-    opening += ` Your ${count} earlier ${earlierCount === 1 ? "ticket was" : "tickets were"} closed${advice ? ` with '${advice[1]}'` : ""}, and that didn't fix the problem.`;
-  }
-  paragraphs.push(opening);
 
   // Missed promise: name exactly what we promised; unknowns stay as placeholders.
   const missedPromise = items.find(i => i.reasons.some(r => r.kind === "promise-missed"));
   if (missedPromise) {
     const m = PATTERNS.promise.exec(missedPromise.ticket.issue);
-    paragraphs.push(`We promised you a ${m[1].trim()} by ${monthName(m[2])} ${Number(m[3])} and have not kept that promise. ` +
+    body.push(`We promised you a ${m[1].trim()} by ${monthName(m[2])} ${Number(m[3])} and have not kept that promise. ` +
       `I'm chasing it today and will confirm [new ship date] and [tracking number] as soon as I have them.`);
+    answered = true;
   }
 
-  // Damaged in transit (Rule 3): confirm photos, say we're filing, promise no outcome.
+  // Damaged in transit (Rule 3): photos, carrier claim (no outcome promised), then the choice.
   if (hasKind("claim-deadline") || hasKind("claim-filed")) {
     const photos = items.some(i => /\bphotos?\b/i.test(i.ticket.issue)) ? "Thank you for the photos of the damage." : "[confirm we have photos of the damage]";
     const filing = hasKind("claim-filed") ? "We have filed a damage claim with the carrier" : "We are filing a damage claim with the carrier now";
-    paragraphs.push(`${photos} ${filing} and will keep you updated on next steps.`);
+    // Only offer a refund if the request was inside the Rule 2 window.
+    const damaged = items.find(i => parseIsoDate(i.ticket.delivered));
+    const requested = Math.min(...items.map(i => dayNumber(parseIsoDate(i.ticket.opened))));
+    const insideWindow = damaged && requested <= dayNumber(addDays(parseIsoDate(damaged.ticket.delivered), 30));
+    const choice = insideWindow
+      ? "Would you like a refund, or should we send a replacement unit? A refund is paid once our warehouse confirms your returned unit."
+      : "Your warranty covers repair or replacement. Which would you prefer?";
+    body.push(`${photos} ${filing} and will keep you updated on next steps. ${choice}`);
+    answered = true;
   }
 
-  // Possible firmware issue: flagging to engineering, no cause, no fix date.
+  // Possible firmware issue (2.4.1 + stalls).
   if (items.some(i => i.firmwareIssue)) {
-    paragraphs.push("I'm flagging the problem you described to our engineering team and will update you as soon as I hear back.");
+    body.push(needsManager
+      ? "There is also an issue with the firmware your unit is on. We can fix it over the phone by downgrading to the previous version. What time works for you? [time options]"
+      : "There is an issue with the new software update. Our team is working on a fix and will send a corrected version as soon as possible. " +
+        "In the meantime we can fix it over the phone by downgrading your unit to the previous software version. What time works for a call? [time options]");
+    answered = true;
+  } else if (items.some(i => PATTERNS.amberLight.test(i.ticket.issue))) {
+    // Amber light without stalling words: the unit runs normally.
+    body.push("The amber light will be fixed with a software update, and I'll let you know as soon as it's available.");
+    answered = true;
   }
 
-  // Refunds.
-  if (needsManager) {
-    // Rule 2, stated plainly. No refund offer and nothing suggesting one is likely.
-    const refundTicket = items.find(i => PATTERNS.refund.test(i.ticket.issue) && parseIsoDate(i.ticket.delivered));
-    const windowEnd = addDays(parseIsoDate(refundTicket.ticket.delivered), 30);
-    paragraphs.push(`Our refund window is 30 days from delivery, and yours ended on ${formatShortDate(windowEnd)}, so I can't promise a refund myself. ` +
-      `After that window, warranty covers repair or replacement, and I'm asking my manager whether an exception is possible. I'll reply by ${replyBy}.`);
-  } else {
-    const warehouseRefund = items.find(i => i.ticket.status === "waiting on warehouse" && PATTERNS.refund.test(i.ticket.issue));
-    const eligibleNotStarted = items.some(i => i.reasons.some(r => r.deadlineRule === 2));
-    if (warehouseRefund) {
-      // Rule 4: refund only after the warehouse confirms. No payment date.
-      const arrived = WAREHOUSE_ARRIVAL.exec(`${warehouseRefund.ticket.issue} ${warehouseRefund.ticket.notes}`);
-      const tracking = arrived
-        ? `Tracking shows your unit reached our warehouse on ${monthName(arrived[1])} ${Number(arrived[2])}, and I'm chasing the warehouse today to confirm they have it.`
-        : "I'm chasing our warehouse today to confirm your returned unit has arrived.";
-      paragraphs.push(`${tracking} Your refund is released once they confirm, so I can't give a payment date yet.`);
-    } else if (eligibleNotStarted) {
-      paragraphs.push("You asked within our 30-day refund window, so I'll send you a return label: [return label]. Once our warehouse confirms your unit has arrived, we'll release your refund.");
-    }
+  // Refunds outside the manager case.
+  if (warehouseRefund) {
+    // Rule 4: the refund is processed only after the warehouse confirms receipt.
+    const arrived = WAREHOUSE_ARRIVAL.exec(`${warehouseRefund.ticket.issue} ${warehouseRefund.ticket.notes}`);
+    const tracking = arrived ? `Tracking shows your unit reached our warehouse on ${monthName(arrived[1])} ${Number(arrived[2])}. ` : "";
+    body.push(`${tracking}I'm confirming with them today, and as soon as they confirm receipt I'll process your refund the same day. It should arrive within 3-5 business days.`);
+    answered = true;
+  } else if (!needsManager && items.some(i => i.reasons.some(r => r.deadlineRule === 2))) {
+    body.push("I've attached your return label. [attach return label] Send the unit back with it. Once our warehouse confirms it has arrived, we release your refund.");
+    answered = true;
   }
 
   // Setup or onboarding help.
   if (items.some(i => PATTERNS.setupHelp.test(i.ticket.issue))) {
-    paragraphs.push("I'd be glad to help you get set up, by email or on a short call. Would any of these times work? [time options]");
+    body.push("I'd be glad to help you get set up, by email or on a short call. Would any of these times work? [time options]");
+    answered = true;
   }
 
   // Happy customer asking to buy another unit.
   if (items.some(i => /\b(second|another) unit\b/i.test(i.ticket.issue))) {
-    paragraphs.push("It's great to hear you're enjoying it! You can order another unit here: [order link]");
+    body.push("It's great to hear you're enjoying it! You can order another unit here: [order link]");
+    answered = true;
   }
 
-  // Nothing above answered the customer: leave a placeholder.
-  if (paragraphs.length === 2) paragraphs.push("[answer the customer's question]");
-  paragraphs.push("Best regards,\n[your name], LILA Support");
-  return paragraphs;
+  if (!answered) body.push("[answer the customer's question]");
+
+  // Anything about the software update or a downgrade must be checked with engineering first.
+  if (body.some(text => /\b(update|downgrad\w*)\b/i.test(text))) body.unshift("[confirm with engineering before sending]");
+
+  return [`Hi ${firstName},`, ...body, "Best regards,\n[your name], LILA Support"];
 }
 
 function countWords(text) {
