@@ -1251,7 +1251,7 @@ function buildDraft(group) {
   if (needsManager)          opening = "Thank you for your message. I'm sorry your unit isn't working.";
   else if (warehouseRefund)  opening = "Thank you for your patience. I'm sorry for the wait on your request.";
   else if (!customerWroteLast) opening = "Thank you for your patience.";
-  else if (overdue)          opening = "Thank you for your message, and for accepting my apologies for the delay.";
+  else if (overdue)          opening = "Thank you for your message, and for your patience with the delay.";
   else                       opening = "Thank you for your message.";
 
   let answered = false; // did any template below answer the customer?
@@ -1269,6 +1269,9 @@ function buildDraft(group) {
 
   // Missed promise: name exactly what we promised; unknowns stay as placeholders.
   const missedPromise = items.find(i => i.reasons.some(r => r.kind === "promise-missed"));
+  if (missedPromise && !customerWroteLast && !needsManager && !warehouseRefund) {
+    body[body.length - 1] += " I apologize that we missed that promise.";
+  }
   if (missedPromise) {
     const m = PATTERNS.promise.exec(missedPromise.ticket.issue);
     body.push(`We promised you a ${m[1].trim()} by ${monthName(m[2])} ${Number(m[3])} and have not kept that promise. ` +
@@ -1285,7 +1288,7 @@ function buildDraft(group) {
     const requested = Math.min(...items.map(i => dayNumber(parseIsoDate(i.ticket.opened))));
     const insideWindow = damaged && requested <= dayNumber(addDays(parseIsoDate(damaged.ticket.delivered), 30));
     const choice = insideWindow
-      ? "Would you like a refund, or should we send a replacement unit? A refund is paid once our warehouse confirms your returned unit."
+      ? "Would you like a refund, or should we send a replacement unit? A refund is paid once our warehouse confirms your returned unit has arrived."
       : "Your warranty covers repair or replacement. Which would you prefer?";
     body.push(`${photos} ${filing} and will keep you updated on next steps. ${choice}`);
     answered = true;
@@ -1316,9 +1319,18 @@ function buildDraft(group) {
     answered = true;
   }
 
-  // Setup or onboarding help.
-  if (items.some(i => PATTERNS.setupHelp.test(i.ticket.issue))) {
-    body.push("I'd be glad to help you get set up, by email or on a short call. Would any of these times work? [time options]");
+  // Setup or onboarding help. The opening line already thanks them for the message.
+  const setupTicket = items.find(i => PATTERNS.setupHelp.test(i.ticket.issue));
+  if (setupTicket) {
+    const issue = setupTicket.ticket.issue;
+    if (/\bwi-fi\b/i.test(issue)) {
+      body.push("I understand you can't connect to Wi-Fi during setup. At which step does it stop, and what does the light on the unit show? " +
+        "I can also walk you through it on a short call. What time works? [time options]");
+    } else if (/\bonboarding\b/i.test(issue)) {
+      body.push("I'd be glad to set up an onboarding call this week. What time works for you? [time options]");
+    } else {
+      body.push("I'd be glad to help you get set up, by email or on a short call. Would any of these times work? [time options]");
+    }
     answered = true;
   }
 
