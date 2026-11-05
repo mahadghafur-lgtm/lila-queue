@@ -159,6 +159,21 @@
     .card { scroll-margin-top: 16px; }
     .card:target { outline: 3px solid var(--t3); outline-offset: 2px; }
 
+    /* ---- Reply drafter ---- */
+    .draft-panel { margin-top: 12px; background: var(--panel); border-radius: 12px; padding: 12px; }
+    .draft-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px; align-items: baseline; }
+    .draft-head .eyebrow { color: var(--maroon); }
+    .draft-words { font-size: 13px; color: var(--text-2); }
+    .draft-words.too-long { color: var(--t1-ink); font-weight: 600; }
+    .draft-body { background: #fff; border: 1px solid #CFC8BC; border-radius: 10px; padding: 10px 12px; margin-top: 8px; font-size: 15px; }
+    .draft-body:focus { outline: 2px solid var(--t3); }
+    .draft-body p { margin: 0 0 10px; white-space: pre-wrap; }
+    .draft-body p:last-child { margin-bottom: 0; }
+    mark.placeholder { background: #FFE58A; color: #5C3D00; border-radius: 4px; padding: 0 3px; font-weight: 600; }
+    .draft-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+    .draft-status { font-size: 13px; }
+    .draft-status.blocked { color: var(--t1-ink); font-weight: 600; }
+
     /* ---- Footer (data checks, collapsed) ---- */
     .site-footer { max-width: 960px; margin: 24px auto 0; padding: 12px 16px 28px; color: var(--text-2); font-size: 13px; }
     .site-footer summary { cursor: pointer; }
@@ -945,6 +960,7 @@ function renderTicket(item, isLinked, leadId) {
   }
 
   card.appendChild(renderControls(item));
+  if (openDrafts.has(t.ticket_id)) card.appendChild(renderDraftPanel(item)); // keep an open draft open after a re-sort
   return card;
 }
 
@@ -993,12 +1009,18 @@ function renderControls(item) {
   noteRow.append(noteInput, noteButton);
   controls.appendChild(noteRow);
 
+  const draftButton = el("button", "Draft reply", "draft-reply pill pill-secondary");
+  draftButton.type = "button";
+  draftButton.addEventListener("click", () => toggleDraft(item, draftButton.closest(".card")));
+  controls.appendChild(draftButton);
+
   return controls;
 }
 
 // A case: its lead ticket, then the other tickets in the case directly below.
 function renderCase(group) {
   const items = group.items;
+  items.forEach(item => { item.group = group; }); // the reply drafter writes one reply per case
   if (items.length === 1 && !group.caseInfo.needsManager) return renderTicket(items[0], false);
 
   const leadId = items[0].ticket.ticket_id;
@@ -1185,6 +1207,177 @@ function renderPatterns(cases) {
   const items = cases.flatMap(group => group.items); // visible tickets, resolved included
   const body = document.getElementById("patterns-body");
   body.replaceChildren(firmwarePattern(items), repeatPattern(cases), setupPattern(items), deadlinePattern(items));
+}
+
+// ---------------------------------------------------------------------------
+// REPLY DRAFTER
+// Plain templates, no AI. The paragraphs are picked from the case's reasons,
+// flags and ticket text, never from ticket IDs. Anything the data doesn't tell
+// us is a [placeholder], highlighted, and Copy refuses while any are left.
+// Guardrails (house rules):
+//  - Never offer a refund on a "Needs manager decision" case (Rule 2).
+//  - A refund is released only after the warehouse confirms the return (Rule 4).
+//  - Never invent tracking numbers, dates or outcomes; never state a firmware cause.
+// ---------------------------------------------------------------------------
+const MAX_DRAFT_WORDS = 120;
+const PLACEHOLDER = /\[[^\]]+\]/g;
+const openDrafts = new Set(); // ticket IDs whose draft panel is open
+
+// Builds the draft for a whole case (linked tickets get one reply) as paragraphs.
+function buildDraft(group) {
+  const items = group.items;
+  const ids = items.map(i => i.ticket.ticket_id).sort();
+  const firstName = items[0].ticket.customer.split(" ")[0];
+  const hasKind = kind => items.some(i => i.reasons.some(r => r.kind === kind));
+  const needsManager = items.some(i => i.needsManager);
+  const ref = ids.length > 1 ? `your tickets ${ids.slice(0, -1).join(", ")} and ${ids[ids.length - 1]}` : `your ticket ${ids[0]}`;
+  const paragraphs = [`Hi ${firstName},`];
+
+  // Opening: thank them, or apologise and name exactly what went wrong.
+  const missedPromise = items.find(i => i.reasons.some(r => r.kind === "promise-missed"));
+  const overdue = items.filter(i => i.reasons.some(r => r.kind === "reply-overdue"))
+    .sort((a, b) => a.lastCustomerDay - b.lastCustomerDay)[0];
+  if (missedPromise) {
+    const m = PATTERNS.promise.exec(missedPromise.ticket.issue);
+    const month = MONTHS.find(name => name.toLowerCase() === m[2].toLowerCase()) || m[2];
+    paragraphs.push(`Thank you for your patience on ${ref}. I'm sorry: we promised you a ${m[1].trim()} by ${month} ${Number(m[3])} and we have not kept that promise. ` +
+      `I'm chasing it today and will confirm [new ship date] and [tracking number] as soon as I have them.`);
+  } else if (overdue) {
+    const wrote = parseIsoDate(overdue.ticket.last_reply_date);
+    paragraphs.push(`I'm sorry for our slow reply on ${ref}. You wrote on ${formatShortDate(wrote)} and should have heard from us by ${formatShortDate(nextBusinessDay(wrote))}.`);
+  } else {
+    paragraphs.push(`Thank you for your message about ${ref}.`);
+  }
+
+  // Damaged in transit (Rule 3): confirm photos, say we're filing, promise no outcome.
+  if (hasKind("claim-deadline") || hasKind("claim-filed")) {
+    const photos = items.some(i => /\bphotos?\b/i.test(i.ticket.issue)) ? "Thank you for the photos of the damage." : "[confirm we have photos of the damage]";
+    const filing = hasKind("claim-filed") ? "We have filed a damage claim with the carrier" : "We are filing a damage claim with the carrier now";
+    paragraphs.push(`${photos} ${filing} and will keep you updated on next steps.`);
+  }
+
+  // Possible firmware issue: flagged to engineering, no cause, no fix date.
+  if (items.some(i => i.firmwareIssue)) {
+    paragraphs.push("I've flagged the problem you described to our engineering team and will update you as soon as I hear back.");
+  }
+
+  // Refunds. A manager-decision case gets no refund wording beyond "reviewing".
+  if (needsManager) {
+    paragraphs.push(`I've passed your refund request to our manager to review, and I'll reply by ${formatDayDate(nextBusinessDay(today))}.`);
+  } else {
+    const warehouseRefund = items.some(i => i.ticket.status === "waiting on warehouse" && PATTERNS.refund.test(i.ticket.issue));
+    const eligibleNotStarted = items.some(i => i.reasons.some(r => r.deadlineRule === 2));
+    if (warehouseRefund) {
+      paragraphs.push("Your refund is released once our warehouse confirms your returned unit has arrived. I'm chasing the warehouse today and will update you as soon as they confirm.");
+    } else if (eligibleNotStarted) {
+      paragraphs.push("You asked within our 30-day refund window, so I'll send you a return label: [return label]. Once our warehouse confirms your unit has arrived, we'll release your refund.");
+    }
+  }
+
+  // Setup or onboarding help.
+  if (items.some(i => PATTERNS.setupHelp.test(i.ticket.issue))) {
+    paragraphs.push("I'd be glad to help you get set up, by email or on a short call. Would any of these times work? [time options]");
+  }
+
+  // Happy customer asking to buy another unit.
+  if (items.some(i => /\b(second|another) unit\b/i.test(i.ticket.issue))) {
+    paragraphs.push("It's great to hear you're enjoying it! You can order another unit here: [order link]");
+  }
+
+  // Nothing above answered the customer (a missed-promise opening counts as an answer): leave a placeholder.
+  if (paragraphs.length === 2 && !missedPromise) paragraphs.push("[answer the customer's question]");
+  paragraphs.push("Best regards,\n[your name], LILA Support");
+  return paragraphs;
+}
+
+function countWords(text) {
+  return text.split(/\s+/).filter(Boolean).length;
+}
+
+// A paragraph with its [placeholders] wrapped in <mark> so they stand out.
+function renderDraftParagraph(text) {
+  const p = el("p");
+  text.split(/(\[[^\]]+\])/).forEach(part => {
+    if (!part) return;
+    p.append(/^\[[^\]]+\]$/.test(part) ? el("mark", part, "placeholder") : part);
+  });
+  return p;
+}
+
+function renderDraftPanel(item) {
+  const group = item.group || { items: [item] };
+  const paragraphs = buildDraft(group);
+  const words = countWords(paragraphs.join(" "));
+
+  const panel = el("div", undefined, "draft-panel");
+  const head = el("div", undefined, "draft-head");
+  const scope = group.items.length > 1 ? `one reply for ${group.items.map(i => i.ticket.ticket_id).sort().join(" + ")}` : item.ticket.ticket_id;
+  head.append(el("span", `Draft reply · ${scope}`, "eyebrow"),
+    el("span", words > MAX_DRAFT_WORDS ? `${words} words (over ${MAX_DRAFT_WORDS})` : `${words} words`, "draft-words" + (words > MAX_DRAFT_WORDS ? " too-long" : "")));
+  panel.appendChild(head);
+
+  const body = el("div", undefined, "draft-body");
+  body.contentEditable = "true";
+  body.setAttribute("role", "textbox");
+  body.setAttribute("aria-multiline", "true");
+  body.setAttribute("aria-label", `Draft reply for ${item.ticket.ticket_id}`);
+  paragraphs.forEach(text => body.appendChild(renderDraftParagraph(text)));
+  panel.appendChild(body);
+
+  const actions = el("div", undefined, "draft-actions");
+  const copyButton = el("button", "Copy", "draft-copy pill pill-primary");
+  copyButton.type = "button";
+  const closeButton = el("button", "Close", "draft-close pill pill-secondary");
+  closeButton.type = "button";
+  const status = el("span", "Fill in the highlighted placeholders, then copy.", "draft-status muted");
+  copyButton.addEventListener("click", () => copyDraft(body, status));
+  closeButton.addEventListener("click", () => toggleDraft(item, panel.closest(".card")));
+  actions.append(copyButton, closeButton, status);
+  panel.appendChild(actions);
+  return panel;
+}
+
+// Copies the draft, but only once every [placeholder] has been filled in.
+async function copyDraft(body, status) {
+  const text = body.innerText.replace(/\n{3,}/g, "\n\n").trim();
+  const left = text.match(PLACEHOLDER) || [];
+  if (left.length) {
+    status.textContent = `Not copied. Fill in first: ${[...new Set(left)].join(", ")}`;
+    status.className = "draft-status blocked";
+    return;
+  }
+  let copied = false;
+  try {
+    await navigator.clipboard.writeText(text);
+    copied = true;
+  } catch (error) {
+    // Fallback for browsers that block the clipboard API (e.g. some file:// pages).
+    try {
+      const range = document.createRange();
+      range.selectNodeContents(body);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      copied = document.execCommand("copy");
+      selection.removeAllRanges();
+    } catch (fallbackError) {
+      copied = false;
+    }
+  }
+  status.textContent = copied ? "Copied." : "Couldn't copy automatically. Select the text and copy it by hand.";
+  status.className = "draft-status " + (copied ? "muted" : "blocked");
+}
+
+function toggleDraft(item, card) {
+  const id = item.ticket.ticket_id;
+  const existing = card.querySelector(".draft-panel");
+  if (existing) {
+    existing.remove();
+    openDrafts.delete(id);
+  } else {
+    card.appendChild(renderDraftPanel(item));
+    openDrafts.add(id);
+  }
 }
 
 function renderStorageNote() {
