@@ -15,6 +15,7 @@ A small internal support tool for LILA (a smart kitchen composter) that a suppor
 ## The date
 - "Today" defaults to **Monday 2026-10-05** (the scenario date), NOT the real clock.
 - Add a small date picker in the header so the user can change "today" and watch priorities update.
+- **Future tickets:** tickets whose `opened` date is after the date-picker date are hidden from the queue and counted in a small note (e.g. "1 ticket not yet opened"). A `last_reply_date` after the picker date is ignored.
 - Parse all dates as plain calendar dates (no time zones). Avoid `new Date("2026-10-05")`, which is read as UTC and can shift a day. Build dates from year, month and day parts.
 
 ## House rules (cannot be changed by the tool)
@@ -71,7 +72,7 @@ Each ticket gets one or more **reasons**. Each reason has a tier. The ticket's t
 
 ## Test dates for the priority logic
 Set the date picker to each date and check:
-- **Sat Oct 3:** T-101 is not overdue (weekend replies are due Monday).
+- **Sat Oct 3:** T-101 is not overdue (weekend replies are due Monday). T-111 (opened Oct 4) is hidden and the note says "1 ticket not yet opened".
 - **Mon Oct 5:** order matches the expected table: T-104, T-108, T-110, T-109/T-101, T-102, T-112, T-105, then the due-today tickets.
 - **Tue Oct 6:** T-104 says the carrier claim closes TODAY.
 - **Wed Oct 7:** T-104 says the carrier claim deadline PASSED yesterday.
