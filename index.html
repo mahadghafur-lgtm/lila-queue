@@ -76,7 +76,9 @@
     .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
     .stat { background: var(--card); border-radius: 12px; padding: 10px 14px; border-top: 4px solid; }
     .stat-number { font-size: 30px; font-weight: 300; line-height: 1.1; }
-    #hidden-note { margin: 10px 0 0; }
+    .summary-caption { margin: 10px 0 0; }
+    #hidden-note { margin: 6px 0 0; }
+    .also-note { margin: 8px 0 0; }
     #hidden-note:empty { display: none; }
 
     /* ---- Tier sections ---- */
@@ -180,6 +182,7 @@
 
     <section class="panel" aria-label="Queue summary">
       <div class="summary-grid" id="summary"></div>
+      <p class="summary-caption muted small">Counts are by reason, so a ticket can count in more than one box. Tier headings count each ticket once, by its most urgent reason.</p>
       <p id="hidden-note" class="muted small"></p>
     </section>
 
@@ -858,9 +861,20 @@ function renderTicket(item, isLinked, leadId) {
     card.appendChild(row);
   }
 
+  // A ticket can be blocked but sit in a more urgent tier (e.g. T-110 in Tier 2).
+  // Say so, because the summary bar still counts it under Blocked.
+  const isBlocked = item.reasons.some(r => r.kind === "blocked");
+  if (isBlocked && item.tier !== 3 && !isResolved) {
+    card.appendChild(el("p",
+      `Also counted under Blocked in the summary. It sits in ${tierParts(item.tier).short} because that is its most urgent reason.`,
+      "also-note muted small"));
+  }
+
   // Reasons: urgent ones (tiers 1-4) in their tier colour, the rest as plain information.
+  // The grey "No reply owed" line is only shown when it is the ticket's only reason.
+  const shownReasons = item.reasons.filter(r => r.kind !== "reply-none" || item.reasons.length === 1);
   const list = el("ul", undefined, "reasons");
-  item.reasons.forEach(reason => {
+  shownReasons.forEach(reason => {
     const urgent = reason.tier <= 4 && !isResolved;
     const li = el("li", undefined, `reason tier-${reason.tier} ${urgent ? "urgent" : "info"}`);
     li.append(el("span", REASON_LABELS[reason.kind] || "Reason", "eyebrow"), el("span", reason.text, "reason-text"));
