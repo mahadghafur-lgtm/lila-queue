@@ -4,13 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>LILA Monday Queue</title>
-  <!-- Slice 2: priority logic. Only basic readability styling; the design comes in a later slice. -->
+  <!-- Slice 3: editing and saving. Only basic readability styling; the design comes in a later slice. -->
   <style>
     body { font-family: system-ui, sans-serif; margin: 16px; max-width: 900px; line-height: 1.4; }
     .ticket { border: 1px solid #ccc; padding: 8px 10px; margin: 8px 0; }
     .case { border-left: 4px solid #999; padding-left: 8px; margin: 12px 0; }
     .linked { margin-left: 24px; }
     .muted { color: #666; }
+    .resolved { opacity: 0.5; }
+    .controls { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    .notice { background: #fff3cd; padding: 4px 8px; }
     ul { margin: 4px 0; padding-left: 20px; }
   </style>
 </head>
@@ -22,8 +25,10 @@
       <input type="date" id="today-picker">
     </label>
     <span id="today-label"></span>
+    <button type="button" id="reset-button">Reset to original data</button>
   </header>
 
+  <p id="storage-note" class="notice" hidden>Your browser is blocking storage, so changes won't be saved after you close or refresh this page.</p>
   <p id="data-checks"></p>
   <p id="hidden-note" class="muted"></p>
 
@@ -203,8 +208,21 @@ const PATTERNS = {
   earlierTickets:  /\b(\w+) earlier tickets?\b/i,                           // "Two earlier tickets"
   internalStep:    /\b(replacement|refund|repair|return)\b(?: unit)? not (allocated|shipped|approved|issued|processed)\b/i,
   promise:         /\bpromised (?:a |an |the )?([a-z ]+?) by (?:[a-z]+,? )?([a-z]{3})[a-z]*\.? (\d{1,2})\b/i, // "promised a replacement by Sep 26"
-  blockedStatus:   /^waiting on (warehouse|carrier|engineering)$/i,
 };
+
+// Statuses that mean "blocked on someone else", and who that someone is.
+const BLOCKED_STATUS_OWNERS = {
+  "waiting on warehouse": "warehouse",
+  "waiting on carrier": "carrier",
+  "waiting on engineering": "engineering",
+  "escalated to manager": "manager",
+};
+
+// The status dropdown options, in order.
+const STATUS_OPTIONS = [
+  "open", "waiting on us", "waiting on customer", "waiting on warehouse",
+  "waiting on carrier", "waiting on engineering", "escalated to manager", "resolved",
+];
 
 const NUMBER_WORDS = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
 const NUMBER_NAMES = ["Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten"];
@@ -325,20 +343,23 @@ function promiseReasons(ticket, today) {
 
 // Blocked on someone else. Only names an owner when the status states one.
 function blockedReasons(ticket, today) {
-  const ownerMatch = PATTERNS.blockedStatus.exec(ticket.status);
+  const owner = BLOCKED_STATUS_OWNERS[ticket.status];
   const stepMatch = PATTERNS.internalStep.exec(ticket.notes);
-  if (!ownerMatch && !stepMatch) return [];
+  if (!owner && !stepMatch) return [];
 
-  // How long blocked: since the last update in the data, else since the ticket opened.
+  // How long blocked: since the user changed the status (if they did and it isn't
+  // after today), else since the last update in the data, else since the ticket opened.
+  const changed = parseIsoDate(ticket.status_changed_on);
   const lastReply = parseIsoDate(ticket.last_reply_date);
-  const useReply = lastReply && dayNumber(lastReply) <= dayNumber(today);
-  const since = useReply ? lastReply : parseIsoDate(ticket.opened);
+  let since, label;
+  if (owner && changed && dayNumber(changed) <= dayNumber(today)) { since = changed; label = "status changed"; }
+  else if (lastReply && dayNumber(lastReply) <= dayNumber(today)) { since = lastReply; label = "last update"; }
+  else { since = parseIsoDate(ticket.opened); label = "the ticket opened"; }
   const days = Math.max(0, daysBetween(since, today));
-  const duration = `${plural(days, "day")} since ${useReply ? "last update" : "the ticket opened"} (${formatShortDate(since)})`;
+  const duration = `${plural(days, "day")} since ${label} (${formatShortDate(since)})`;
 
   let text;
-  if (ownerMatch) {
-    const owner = ownerMatch[1].toLowerCase();
+  if (owner) {
     text = `Blocked on ${owner} (status: ${ticket.status}), ${duration}.`;
     if (owner === "warehouse" && PATTERNS.refund.test(ticket.issue)) {
       text += " Rule 4: the refund is paid only after the warehouse confirms the returned unit arrived.";
@@ -455,9 +476,125 @@ function assumptionText(caseInfo) {
 
 // ---------------------------------------------------------------------------
 // APP STATE
+// The original tickets never change. The user's changes are kept separately
+// as "edits" and laid on top each time the queue is drawn.
 // ---------------------------------------------------------------------------
-const tickets = rowsToTickets(parseCsv(TICKETS_CSV));
+const originalTickets = rowsToTickets(parseCsv(TICKETS_CSV));
 let today = parseIsoDate(DEFAULT_TODAY);
+
+// ---------------------------------------------------------------------------
+// SAVING (localStorage)
+// edits looks like: { "T-104": { status, status_changed_on, last_reply_from,
+// last_reply_date, notes: [{ stamp, text }] } }. Every storage call is wrapped
+// in try/catch: if storage is blocked the page still works, it just can't save.
+// ---------------------------------------------------------------------------
+const STORAGE_KEY = "lila-queue-edits-v1";
+let storageWorks = true;
+let edits = loadEdits();
+
+function loadEdits() {
+  let saved = null;
+  try {
+    window.localStorage.setItem(STORAGE_KEY + "-probe", "1"); // can we write at all?
+    window.localStorage.removeItem(STORAGE_KEY + "-probe");
+    saved = window.localStorage.getItem(STORAGE_KEY);
+  } catch (error) {
+    storageWorks = false;
+    return {};
+  }
+  try {
+    const parsed = saved ? JSON.parse(saved) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (error) {
+    return {}; // saved data was unreadable; start from the original data
+  }
+}
+
+function saveEdits() {
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(edits));
+    storageWorks = true;
+  } catch (error) {
+    storageWorks = false;
+  }
+}
+
+function clearSavedEdits() {
+  edits = {};
+  try {
+    window.localStorage.removeItem(STORAGE_KEY);
+  } catch (error) {
+    storageWorks = false;
+  }
+}
+
+// The edit record for one ticket, created on first use.
+function editFor(ticketId) {
+  if (!edits[ticketId]) edits[ticketId] = {};
+  return edits[ticketId];
+}
+
+// The tickets as they are now: original data with the user's edits on top.
+function currentTickets() {
+  return originalTickets.map(original => {
+    const edit = edits[original.ticket_id] || {};
+    return {
+      ...original,
+      status: edit.status ?? original.status,
+      status_changed_on: edit.status_changed_on ?? "",
+      last_reply_from: edit.last_reply_from ?? original.last_reply_from,
+      last_reply_date: edit.last_reply_date ?? original.last_reply_date,
+      added_notes: Array.isArray(edit.notes) ? edit.notes : [],
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// USER ACTIONS
+// Each one records an edit, saves, and redraws (which re-sorts the queue).
+// ---------------------------------------------------------------------------
+function setStatus(ticketId, status) {
+  const edit = editFor(ticketId);
+  edit.status = status;
+  edit.status_changed_on = toIsoDate(today);
+  saveAndRender();
+}
+
+// Note stamp: the picker date plus the real clock time, e.g. "Oct 5, 2026, 10:42".
+function noteStamp() {
+  const now = new Date();
+  const time = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  return `${formatShortDate(today)}, ${today.getFullYear()}, ${time}`;
+}
+
+function addNote(ticketId, text) {
+  const cleaned = text.trim();
+  if (!cleaned) return;
+  const edit = editFor(ticketId);
+  edit.notes = [...(Array.isArray(edit.notes) ? edit.notes : []), { stamp: noteStamp(), text: cleaned }];
+  saveAndRender();
+}
+
+// Sets last_reply_from = us and last_reply_date = the picker date.
+function markReplied(ticketIds) {
+  ticketIds.forEach(id => {
+    const edit = editFor(id);
+    edit.last_reply_from = "us";
+    edit.last_reply_date = toIsoDate(today);
+  });
+  saveAndRender();
+}
+
+function resetToOriginal() {
+  if (!window.confirm("Reset to original data? This removes all status changes, notes and replies you added.")) return;
+  clearSavedEdits();
+  renderAll();
+}
+
+function saveAndRender() {
+  saveEdits();
+  renderAll();
+}
 
 // ---------------------------------------------------------------------------
 // RENDERING
@@ -480,14 +617,20 @@ function renderToday() {
 // One ticket: header line, issue, notes, details, flags and reasons.
 function renderTicket(item, isLinked) {
   const t = item.ticket;
-  const box = el("div", undefined, "ticket" + (isLinked ? " linked" : ""));
+  const isResolved = item.tier === RESOLVED_TIER;
+  const box = el("div", undefined, "ticket" + (isLinked ? " linked" : "") + (isResolved ? " resolved" : ""));
   box.dataset.ticketId = t.ticket_id;
   box.dataset.tier = item.tier;
 
   const title = `${t.ticket_id} · ${t.customer} · ${TIER_NAMES[item.tier]}` + (isLinked ? ` · linked to ${item.linkedIds.join(", ")}` : "");
   box.appendChild(el("strong", title));
   box.appendChild(el("div", `Issue: ${t.issue}`));
-  box.appendChild(el("div", `Notes: ${t.notes}`)); // blank notes stay blank
+  box.appendChild(el("div", `Notes: ${t.notes}`)); // the original CSV note, never changed; blank stays blank
+  if (t.added_notes.length) {
+    const noteList = el("ul", undefined, "added-notes");
+    t.added_notes.forEach(note => noteList.appendChild(el("li", `${note.stamp}: ${note.text}`)));
+    box.appendChild(noteList);
+  }
   box.appendChild(el("div",
     `Status: ${t.status} · opened ${t.opened} · delivered ${t.delivered} · ${t.country} · firmware ${t.firmware} · last reply from ${t.last_reply_from} on ${t.last_reply_date}`,
     "muted"));
@@ -501,10 +644,58 @@ function renderTicket(item, isLinked) {
   if (flags.length) box.appendChild(el("div", `Flags: ${flags.join(" · ")}`));
 
   box.appendChild(el("div", "Reasons:"));
-  const list = el("ul");
+  const list = el("ul", undefined, "reasons");
   item.reasons.forEach(reason => list.appendChild(el("li", reason.text)));
   box.appendChild(list);
+
+  box.appendChild(renderControls(item));
   return box;
+}
+
+// Status dropdown, Mark replied (with the linked-tickets checkbox) and Add note.
+function renderControls(item) {
+  const id = item.ticket.ticket_id;
+  const controls = el("div", undefined, "controls");
+
+  const select = el("select", undefined, "status-select");
+  select.setAttribute("aria-label", `Status for ${id}`);
+  const options = STATUS_OPTIONS.includes(item.ticket.status) ? STATUS_OPTIONS : [item.ticket.status, ...STATUS_OPTIONS];
+  options.forEach(status => {
+    const option = el("option", status);
+    option.value = status;
+    select.appendChild(option);
+  });
+  select.value = item.ticket.status;
+  select.addEventListener("change", () => setStatus(id, select.value));
+  controls.appendChild(select);
+
+  const replyButton = el("button", "Mark replied", "mark-replied");
+  replyButton.type = "button";
+  controls.appendChild(replyButton);
+  let alsoLinked = null;
+  if (item.linkedIds.length) {
+    const label = el("label");
+    alsoLinked = el("input", undefined, "also-linked");
+    alsoLinked.type = "checkbox";
+    alsoLinked.checked = true;
+    label.append(alsoLinked, " Also mark linked tickets replied");
+    controls.appendChild(label);
+  }
+  replyButton.addEventListener("click", () => {
+    markReplied(alsoLinked && alsoLinked.checked ? [id, ...item.linkedIds] : [id]);
+  });
+
+  const noteInput = el("input", undefined, "note-input");
+  noteInput.type = "text";
+  noteInput.placeholder = "Add note";
+  noteInput.setAttribute("aria-label", `New note for ${id}`);
+  const noteButton = el("button", "Add note", "add-note");
+  noteButton.type = "button";
+  noteButton.addEventListener("click", () => addNote(id, noteInput.value));
+  noteInput.addEventListener("keydown", event => { if (event.key === "Enter") addNote(id, noteInput.value); });
+  controls.append(noteInput, noteButton);
+
+  return controls;
 }
 
 // A case: its lead ticket, then the other tickets in the case directly below.
@@ -523,7 +714,7 @@ function renderCase(group) {
 }
 
 function renderQueue() {
-  const { cases, hiddenCount } = buildQueue(tickets, today);
+  const { cases, hiddenCount } = buildQueue(currentTickets(), today);
   const queue = document.getElementById("queue");
   queue.replaceChildren();
 
@@ -538,11 +729,22 @@ function renderQueue() {
     : `${plural(hiddenCount, "ticket")} not yet opened`;
 }
 
+function renderStorageNote() {
+  document.getElementById("storage-note").hidden = storageWorks;
+}
+
+function renderAll() {
+  renderToday();
+  renderQueue();
+  renderStorageNote();
+}
+
 // ---------------------------------------------------------------------------
 // DATA CHECKS
 // Quick checks from CLAUDE.md, shown on the page so they are easy to verify.
 // ---------------------------------------------------------------------------
 function runDataChecks() {
+  const tickets = originalTickets;
   const byId = id => tickets.find(t => t.ticket_id === id) || {};
   const checks = [
     ["12 tickets loaded", tickets.length === 12],
@@ -565,12 +767,11 @@ function runDataChecks() {
 document.getElementById("today-picker").addEventListener("change", event => {
   const picked = parseIsoDate(event.target.value);
   if (picked) today = picked; // ignore a cleared or invalid picker
-  renderToday();
-  renderQueue();
+  renderAll();
 });
+document.getElementById("reset-button").addEventListener("click", resetToOriginal);
 
-renderToday();
-renderQueue();
+renderAll();
 runDataChecks();
 </script>
 </body>
