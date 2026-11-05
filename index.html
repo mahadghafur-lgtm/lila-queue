@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LILA Monday Queue</title>
+  <!-- Slice 1: skeleton and data only. Styling comes in a later slice. -->
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 16px; }
+    table { border-collapse: collapse; }
+    th, td { border: 1px solid #ccc; padding: 4px 6px; text-align: left; vertical-align: top; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>LILA Monday Queue</h1>
+    <label>
+      Today:
+      <input type="date" id="today-picker">
+    </label>
+    <span id="today-label"></span>
+  </header>
+
+  <p id="data-checks"></p>
+
+  <main>
+    <h2>Tickets (<span id="ticket-count">0</span>)</h2>
+    <table>
+      <thead><tr id="ticket-head"></tr></thead>
+      <tbody id="ticket-body"></tbody>
+    </table>
+  </main>
+
+<script>
+// ---------------------------------------------------------------------------
+// TICKET DATA
+// Copy of tickets.csv. Browsers block fetch() on file://, so the CSV lives
+// here as a string. If you edit tickets.csv, paste the new text here too.
+// ---------------------------------------------------------------------------
+const TICKETS_CSV = `ticket_id,opened,customer,country,delivered,firmware,issue,status,last_reply_from,last_reply_date,notes
+T-101,2026-09-28,Maya Okafor,CA,2026-08-25,2.4.1,"Cycle stops halfway since the last update. Third time writing in. Wants a full refund.",open,customer,2026-10-03,"Two earlier tickets were closed with 'restart the unit'."
+T-102,2026-10-01,Daniel Reyes,US,2026-09-12,2.4.1,"Unit pauses mid-cycle and the light blinks amber.",open,customer,2026-10-01,
+T-103,2026-10-02,Priya Nair,CA,2026-09-20,2.4.1,"Stops after about an hour. Worked fine before the update.",open,customer,2026-10-02,
+T-104,2026-09-24,Tom Lindqvist,US,2026-09-22,2.3.0,"Box arrived crushed and the lid is cracked. Photos attached.",waiting on us,customer,2026-09-24,"Carrier claim not filed yet."
+T-105,2026-09-18,Grace Chen,CA,2026-09-01,2.3.0,"Sent the unit back for a refund. Tracking shows it reached the warehouse on Sep 26.",waiting on warehouse,us,2026-09-27,"Warehouse has not confirmed receipt. Refund on hold."
+T-106,2026-10-03,Samir Haddad,CA,2026-10-01,2.4.1,"Cannot connect to Wi-Fi during setup.",open,customer,2026-10-03,
+T-107,2026-10-02,Lena Fischer,US,2026-09-30,2.4.0,"Would like an onboarding call this week.",open,customer,2026-10-02,
+T-108,2026-09-29,Andre Baptiste,CA,2026-09-10,2.3.0,"Changed his mind and wants a refund. Needs a return label.",open,customer,2026-09-29,
+T-109,2026-09-30,Maya Okafor,CA,2026-08-25,2.4.1,"Following up on my refund request. Nobody has answered.",open,customer,2026-09-30,
+T-110,2026-09-25,Hannah Brooks,US,2026-08-30,2.3.0,"Was promised a replacement by Sep 26. Still no tracking number.",waiting on us,us,2026-09-26,"Replacement unit not allocated yet."
+T-111,2026-10-04,Oliver Grant,CA,2026-09-05,2.4.0,"Loves it. Asks how to order a second unit for his parents.",open,customer,2026-10-04,
+T-112,2026-10-01,Sofia Marino,US,2026-09-27,2.4.0,"Amber light is blinking. Unit seems to run normally.",open,customer,2026-10-01,`;
+
+// The scenario date. "Today" starts here, not on the real clock.
+const DEFAULT_TODAY = "2026-10-05";
+
+// ---------------------------------------------------------------------------
+// CSV PARSER
+// Reads the text one character at a time so quoted fields can hold commas,
+// line breaks and apostrophes. A doubled quote ("") inside quotes means one ".
+// Returns an array of rows; each row is an array of strings ("" when empty).
+// ---------------------------------------------------------------------------
+function parseCsv(text) {
+  const rows = [];
+  let row = [];
+  let field = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+
+    if (inQuotes) {
+      if (ch === '"' && text[i + 1] === '"') { field += '"'; i++; } // escaped quote
+      else if (ch === '"') { inQuotes = false; }                    // closing quote
+      else { field += ch; }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ",") {
+      row.push(field); field = "";
+    } else if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && text[i + 1] === "\n") i++;                 // Windows line end
+      row.push(field); rows.push(row);
+      row = []; field = "";
+    } else {
+      field += ch;
+    }
+  }
+  // Last line has no line break after it.
+  if (field !== "" || row.length > 0) { row.push(field); rows.push(row); }
+
+  // Drop fully blank lines.
+  return rows.filter(r => !(r.length === 1 && r[0].trim() === ""));
+}
+
+// Turns parsed rows into objects keyed by the header names.
+// Missing trailing fields become "" so nothing ever shows "undefined".
+function rowsToTickets(rows) {
+  const headers = rows[0].map(h => h.trim());
+  return rows.slice(1).map(cells => {
+    const ticket = {};
+    headers.forEach((name, i) => { ticket[name] = (cells[i] ?? "").trim(); });
+    return ticket;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// DATE HELPERS
+// All dates are plain calendar dates in local time, built from year, month
+// and day parts. Never use new Date("YYYY-MM-DD"): it is read as UTC and can
+// land on the previous day.
+// ---------------------------------------------------------------------------
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// Builds a date from parts. month is 1-12.
+function makeDate(year, month, day) {
+  return new Date(year, month - 1, day);
+}
+
+// "2026-10-05" -> Date, or null if the text is not a real calendar date.
+function parseIsoDate(text) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec((text || "").trim());
+  if (!match) return null;
+  const [year, month, day] = [Number(match[1]), Number(match[2]), Number(match[3])];
+  const date = makeDate(year, month, day);
+  // Reject dates like 2026-02-31 that roll over into the next month.
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return null;
+  return date;
+}
+
+// Date -> "2026-10-05" (the format the date picker uses).
+function toIsoDate(date) {
+  const pad = n => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+// Date -> "Monday, Oct 5, 2026".
+function formatLongDate(date) {
+  return `${WEEKDAYS[date.getDay()]}, ${MONTHS[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
+}
+
+// ---------------------------------------------------------------------------
+// APP STATE
+// ---------------------------------------------------------------------------
+const tickets = rowsToTickets(parseCsv(TICKETS_CSV));
+let today = parseIsoDate(DEFAULT_TODAY);
+
+// ---------------------------------------------------------------------------
+// RENDERING
+// textContent is used everywhere so ticket text can never inject HTML.
+// ---------------------------------------------------------------------------
+function renderToday() {
+  document.getElementById("today-picker").value = toIsoDate(today);
+  document.getElementById("today-label").textContent = formatLongDate(today);
+}
+
+function renderTickets() {
+  const columns = Object.keys(tickets[0] || {});
+  const head = document.getElementById("ticket-head");
+  const body = document.getElementById("ticket-body");
+  head.replaceChildren();
+  body.replaceChildren();
+
+  columns.forEach(name => {
+    const th = document.createElement("th");
+    th.textContent = name;
+    head.appendChild(th);
+  });
+
+  tickets.forEach(ticket => {
+    const tr = document.createElement("tr");
+    columns.forEach(name => {
+      const td = document.createElement("td");
+      td.textContent = ticket[name]; // always a string, "" when blank
+      tr.appendChild(td);
+    });
+    body.appendChild(tr);
+  });
+
+  document.getElementById("ticket-count").textContent = tickets.length;
+}
+
+// ---------------------------------------------------------------------------
+// DATA CHECKS
+// Quick checks from CLAUDE.md, shown on the page so they are easy to verify.
+// ---------------------------------------------------------------------------
+function runDataChecks() {
+  const byId = id => tickets.find(t => t.ticket_id === id) || {};
+  const checks = [
+    ["12 tickets loaded", tickets.length === 12],
+    ["every ticket has 11 fields", tickets.every(t => Object.keys(t).length === 11)],
+    ["T-102 notes are blank", byId("T-102").notes === ""],
+    ["T-101 note keeps its apostrophes", byId("T-101").notes === "Two earlier tickets were closed with 'restart the unit'."],
+    ["Oct 5, 2026 is a Monday", formatLongDate(parseIsoDate("2026-10-05")).startsWith("Monday")],
+    ["no field says \"undefined\"", tickets.every(t => Object.values(t).every(v => v !== "undefined"))],
+  ];
+  const failed = checks.filter(([, ok]) => !ok).map(([name]) => name);
+  document.getElementById("data-checks").textContent = failed.length === 0
+    ? `Data checks: all ${checks.length} passed.`
+    : `Data checks FAILED: ${failed.join("; ")}`;
+  checks.forEach(([name, ok]) => console.log(ok ? "PASS" : "FAIL", name));
+}
+
+// ---------------------------------------------------------------------------
+// START
+// ---------------------------------------------------------------------------
+document.getElementById("today-picker").addEventListener("change", event => {
+  const picked = parseIsoDate(event.target.value);
+  if (picked) today = picked; // ignore a cleared or invalid picker
+  renderToday();
+});
+
+renderToday();
+renderTickets();
+runDataChecks();
+</script>
+</body>
+</html>
