@@ -7,7 +7,8 @@ A small internal support tool for LILA (a smart kitchen composter) that a suppor
 - ONE file: `index.html` with inline CSS and plain JavaScript. No frameworks, no build step, no npm, no backend, no API keys.
 - It must work by double-clicking `index.html` (file://) AND on GitHub Pages.
 - Do NOT use `fetch()` to load `tickets.csv`. Browsers block fetch on file://. Instead, embed the CSV text inside `index.html` as a string and parse it. Keep `tickets.csv` in the repo as the source copy.
-- The CSV has quoted fields that contain commas and apostrophes. Use a real CSV parser that handles quotes, not `split(',')`.
+- The CSV has quoted fields that contain apostrophes (the sample has no commas inside quoted fields, but real exports may). Use a real quote-aware CSV parser anyway, not `split(',')`.
+- Parser tests: an empty field (e.g. T-102's notes) must show blank, never "undefined"; T-101's note must keep its apostrophes (`'restart the unit'`).
 - Save user changes in `localStorage`, wrapped in try/catch. The page must still work if storage is blocked.
 - Keep code readable: clear function names and short comments. The owner must be able to make a small change live on a call.
 
@@ -45,7 +46,9 @@ Each ticket gets one or more **reasons**. Each reason has a tier. The ticket's t
 - Sort by business days late, most first.
 
 **Tier 3: Blocked on someone else**
-- Status is "waiting on warehouse", "waiting on carrier" or "waiting on engineering", or the notes say an internal step is not done (e.g. "not allocated yet"). Name who it is blocked on.
+- Status is "waiting on warehouse", "waiting on carrier" or "waiting on engineering", or the notes say an internal step is not done (e.g. "not allocated yet").
+- Name an owner ONLY when the data states one (e.g. the status says "waiting on warehouse"). Never invent an owner. In the sample data only T-105 is blocked on the warehouse.
+- When no owner is stated, say so, e.g. T-110: "Blocked: replacement not allocated (owner not stated in the data)".
 - Sort by how long it has been blocked.
 
 **Tier 4: Reply due today**
@@ -63,7 +66,15 @@ Each ticket gets one or more **reasons**. Each reason has a tier. The ticket's t
 **Extra flags (shown as small tags; they do not change the tier):**
 - **Repeat customer:** same customer name on more than one ticket, or notes mention earlier tickets. Link the tickets together.
 - **Needs manager decision:** customer wants a refund but delivery was more than 30 days before the request (Rule 2). The tool must never offer a refund here.
+  - On every case with this flag, show an **Assumption** line, e.g. "Refund request date taken from earliest ticket in the data (Sep 28). Two earlier tickets are not in the data; check their dates." Build the date (earliest `opened` in the case) and the earlier-ticket count (from the notes) from the data for each case; do not hard-code them.
 - **Possible firmware issue:** only when firmware is 2.4.1 AND the issue text uses stalling language (stops, pauses, stalls, or "since the update"). Do NOT flag on firmware 2.4.1 alone, and do NOT flag on an amber light alone.
+
+## Test dates for the priority logic
+Set the date picker to each date and check:
+- **Sat Oct 3:** T-101 is not overdue (weekend replies are due Monday).
+- **Mon Oct 5:** order matches the expected table: T-104, T-108, T-110, T-109/T-101, T-102, T-112, T-105, then the due-today tickets.
+- **Tue Oct 6:** T-104 says the carrier claim closes TODAY.
+- **Wed Oct 7:** T-104 says the carrier claim deadline PASSED yesterday.
 
 ## Features
 **Must-haves**
@@ -75,6 +86,7 @@ Each ticket gets one or more **reasons**. Each reason has a tier. The ticket's t
 
 **Extra feature (the main one): Pattern panel**
 - Groups tickets that share a likely cause (e.g. firmware 2.4.1 stalls) with a count and ticket IDs.
+- Second cluster, **"New-customer setup help"**: tickets whose issue text mentions setup, connect, Wi-Fi or onboarding (whole-word matching). Show the count, the ticket IDs, and the days since delivery for each. In the sample data: T-106 (Wi-Fi during setup) and T-107 (onboarding call).
 - Lists repeat customers.
 - Lists deadlines expiring in the next 7 days.
 
