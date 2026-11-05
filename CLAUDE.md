@@ -28,6 +28,7 @@ Only the manager can make an exception.
 - **Reply due (Rule 1):** applies only when `last_reply_from` = customer. Due date = 1 business day after `last_reply_date`. A message on Fri, Sat or Sun is due Monday.
 - **Business days late:** number of business days after the due date, up to and including today.
 - **Refund window end (Rule 2):** delivered + 30 calendar days.
+- **Refund eligibility (Rule 2):** judged by the date the customer asked for the refund, NOT today's date. A refund requested on or before the window end stays eligible even if the window has since ended.
 - **Carrier claim deadline (Rule 3):** delivered + 14 calendar days.
 
 ## Priority logic
@@ -57,10 +58,12 @@ Each ticket gets one or more **reasons**. Each reason has a tier. The ticket's t
 
 **Tie-breaks inside a tier:** repeat customers first, then oldest last customer message, then ticket ID.
 
+**Cases (linked tickets):** tickets from the same customer about the same problem are one case. Show them linked and place them next to each other in the queue. The case is ranked by its most urgent ticket; the other tickets in the case sit directly below it.
+
 **Extra flags (shown as small tags; they do not change the tier):**
 - **Repeat customer:** same customer name on more than one ticket, or notes mention earlier tickets. Link the tickets together.
 - **Needs manager decision:** customer wants a refund but delivery was more than 30 days before the request (Rule 2). The tool must never offer a refund here.
-- **Possible firmware issue:** firmware 2.4.1, or issue text mentions stopping, pausing, stalling, an amber light, or "since the update".
+- **Possible firmware issue:** only when firmware is 2.4.1 AND the issue text uses stalling language (stops, pauses, stalls, or "since the update"). Do NOT flag on firmware 2.4.1 alone, and do NOT flag on an amber light alone.
 
 ## Features
 **Must-haves**
