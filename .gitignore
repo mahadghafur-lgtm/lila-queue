@@ -1,0 +1,4 @@
+# macOS Finder metadata
+.DS_Store
+# Local Claude Code config (points at a temporary test-server folder on this machine)
+.claude/
