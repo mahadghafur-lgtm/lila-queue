@@ -203,6 +203,7 @@
           <input type="date" id="today-picker">
         </label>
         <span id="today-label"></span>
+        <button type="button" id="export-button" class="pill pill-ghost-light">Export CSV</button>
         <button type="button" id="reset-button" class="pill pill-ghost-light">Reset to original data</button>
       </div>
     </div>
@@ -786,6 +787,50 @@ function markReplied(ticketIds) {
     edit.last_reply_date = toIsoDate(today);
   });
   saveAndRender();
+}
+
+// ---------------------------------------------------------------------------
+// CSV EXPORT
+// Downloads all 12 tickets (resolved and not-yet-opened included) with the
+// user's edits: status, last_reply_from, last_reply_date, and added notes
+// appended to the notes column with " | ". Same 11 columns as tickets.csv.
+// ---------------------------------------------------------------------------
+const FREE_TEXT_COLUMNS = ["issue", "notes"]; // quoted whenever they have text, like tickets.csv
+
+// One CSV field. Quotes it if it has a comma, quote or line break (doubling any
+// quotes inside), or if it is a non-empty free-text column.
+function csvField(value, column) {
+  const text = String(value ?? "");
+  const mustQuote = /[",\r\n]/.test(text) || (FREE_TEXT_COLUMNS.includes(column) && text !== "");
+  return mustQuote ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function buildExportCsv() {
+  const columns = Object.keys(originalTickets[0]);
+  const lines = [columns.map(name => csvField(name, "")).join(",")];
+  currentTickets().forEach(ticket => {
+    const added = ticket.added_notes.map(note => `${note.stamp}: ${note.text}`);
+    const row = { ...ticket, notes: [ticket.notes, ...added].filter(Boolean).join(" | ") };
+    lines.push(columns.map(name => csvField(row[name], name)).join(","));
+  });
+  return lines.join("\n") + "\n";
+}
+
+function exportCsv() {
+  const fileName = `lila-queue-${toIsoDate(today)}.csv`;
+  try {
+    const blob = new Blob([buildExportCsv()], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) {
+    window.alert("Sorry, the CSV could not be downloaded in this browser.");
+  }
 }
 
 function resetToOriginal() {
@@ -1482,6 +1527,7 @@ document.getElementById("today-picker").addEventListener("change", event => {
   renderAll();
 });
 document.getElementById("reset-button").addEventListener("click", resetToOriginal);
+document.getElementById("export-button").addEventListener("click", exportCsv);
 
 renderAll();
 runDataChecks();
