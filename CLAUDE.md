@@ -92,7 +92,8 @@ Set the date picker to each date and check:
 - Lists deadlines expiring in the next 7 days.
 
 **Small extras (after the core works)**
-- **Reply template drafter:** a draft reply per ticket built from simple templates. It follows the house rules (it never promises a refund outside Rule 2 or before Rule 4). Copy button. No AI API.
+- **Reply template drafter:** a draft reply per ticket built from simple templates. It follows the house rules (it never promises a refund outside Rule 2 or before Rule 4). Send button: disabled while any [placeholder] is unfilled; when clicked it sends nothing, shows "Sent to <customer> (demo: no email is actually sent)", sets last_reply_from = us and last_reply_date = today, adds a "Reply sent" note, saves like other edits and re-sorts (status unchanged). For a linked case it applies to every ticket in the case. No AI API.
+  - Send is a demo button. A real version would connect to an email service.
 - **CSV export:** downloads the current queue including the user's changes.
 
 ## Design (inspired by the LILA brand, no logos or copied content)

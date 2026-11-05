@@ -173,6 +173,8 @@
     .draft-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
     .draft-status { font-size: 13px; }
     .draft-status.blocked { color: var(--t1-ink); font-weight: 600; }
+    .pill:disabled { opacity: 0.45; cursor: not-allowed; }
+    .sent-confirmation { margin: 12px 0 0; padding: 8px 12px; border-radius: 10px; background: var(--t5-bg); color: var(--t5-ink); font-weight: 600; font-size: 14px; }
 
     /* ---- Footer (data checks, collapsed) ---- */
     .site-footer { max-width: 960px; margin: 24px auto 0; padding: 12px 16px 28px; color: var(--text-2); font-size: 13px; }
@@ -836,6 +838,8 @@ function exportCsv() {
 function resetToOriginal() {
   if (!window.confirm("Reset to original data? This removes all status changes, notes and replies you added.")) return;
   clearSavedEdits();
+  sentConfirmations.clear(); // "Sent to…" messages no longer true once the sends are undone
+  openDrafts.clear();
   renderAll();
 }
 
@@ -1006,6 +1010,7 @@ function renderTicket(item, isLinked, leadId) {
 
   card.appendChild(renderControls(item));
   if (openDrafts.has(t.ticket_id)) card.appendChild(renderDraftPanel(item)); // keep an open draft open after a re-sort
+  if (sentConfirmations.has(t.ticket_id)) card.appendChild(el("p", sentConfirmations.get(t.ticket_id), "sent-confirmation"));
   return card;
 }
 
@@ -1258,7 +1263,7 @@ function renderPatterns(cases) {
 // REPLY DRAFTER
 // Plain templates, no AI. The paragraphs are picked from the case's reasons,
 // flags and ticket text, never from ticket IDs. Anything the data doesn't tell
-// us is a [placeholder], highlighted, and Copy refuses while any are left.
+// us is a [placeholder], highlighted, and Send stays disabled while any are left.
 // Guardrails (house rules):
 //  - Never offer a refund on a "Needs manager decision" case (Rule 2).
 //  - A refund is released only after the warehouse confirms the return (Rule 4).
@@ -1279,7 +1284,7 @@ const WAREHOUSE_ARRIVAL = /\breached (?:the |our )?warehouse on ([a-z]{3})[a-z]*
 // Builds the draft for a whole case (linked tickets get one reply) as paragraphs.
 // Wording is the owner's. Statements about the software update or a downgrade
 // are NOT in the ticket data, so any draft that makes them starts with a
-// [confirm with engineering before sending] placeholder (Copy stays blocked).
+// [confirm with engineering before sending] placeholder (Send stays disabled).
 function buildDraft(group) {
   const items = group.items;
   const firstName = items[0].ticket.customer.split(" ")[0];
@@ -1426,47 +1431,58 @@ function renderDraftPanel(item) {
   panel.appendChild(body);
 
   const actions = el("div", undefined, "draft-actions");
-  const copyButton = el("button", "Copy", "draft-copy pill pill-primary");
-  copyButton.type = "button";
+  const sendButton = el("button", "Send", "draft-send pill pill-primary");
+  sendButton.type = "button";
   const closeButton = el("button", "Close", "draft-close pill pill-secondary");
   closeButton.type = "button";
-  const status = el("span", "Fill in the highlighted placeholders, then copy.", "draft-status muted");
-  copyButton.addEventListener("click", () => copyDraft(body, status));
+  const status = el("span", "", "draft-status");
+  const ticketIds = group.items.map(i => i.ticket.ticket_id);
+  const customer = group.items[0].ticket.customer;
+
+  // Send stays disabled while any [placeholder] is left. Re-checked on every edit.
+  const refreshSendState = () => {
+    const left = placeholdersLeft(body);
+    sendButton.disabled = left.length > 0;
+    status.textContent = left.length ? `Send is disabled until you fill in: ${left.join(", ")}` : "Ready to send.";
+    status.className = "draft-status " + (left.length ? "blocked" : "muted");
+  };
+  body.addEventListener("input", refreshSendState);
+  refreshSendState();
+
+  sendButton.addEventListener("click", () => {
+    if (placeholdersLeft(body).length) { refreshSendState(); return; } // safety: never send with placeholders
+    sendReply(ticketIds, customer);
+  });
   closeButton.addEventListener("click", () => toggleDraft(item, panel.closest(".card")));
-  actions.append(copyButton, closeButton, status);
+  actions.append(sendButton, closeButton, status);
   panel.appendChild(actions);
   return panel;
 }
 
-// Copies the draft, but only once every [placeholder] has been filled in.
-async function copyDraft(body, status) {
-  const text = body.innerText.replace(/\n{3,}/g, "\n\n").trim();
-  const left = text.match(PLACEHOLDER) || [];
-  if (left.length) {
-    status.textContent = `Not copied. Fill in first: ${[...new Set(left)].join(", ")}`;
-    status.className = "draft-status blocked";
-    return;
-  }
-  let copied = false;
-  try {
-    await navigator.clipboard.writeText(text);
-    copied = true;
-  } catch (error) {
-    // Fallback for browsers that block the clipboard API (e.g. some file:// pages).
-    try {
-      const range = document.createRange();
-      range.selectNodeContents(body);
-      const selection = window.getSelection();
-      selection.removeAllRanges();
-      selection.addRange(range);
-      copied = document.execCommand("copy");
-      selection.removeAllRanges();
-    } catch (fallbackError) {
-      copied = false;
-    }
-  }
-  status.textContent = copied ? "Copied." : "Couldn't copy automatically. Select the text and copy it by hand.";
-  status.className = "draft-status " + (copied ? "muted" : "blocked");
+// The unfilled [placeholders] in a draft, without duplicates.
+function placeholdersLeft(body) {
+  return [...new Set(body.innerText.match(PLACEHOLDER) || [])];
+}
+
+// DEMO SEND: nothing is emailed and nothing is copied. It records the reply as
+// an edit (like "Mark replied" plus a "Reply sent" note) on every ticket in the
+// case, saves through the same localStorage layer, and re-sorts the queue.
+// Status is NOT changed. A real version would connect to an email service.
+const sentConfirmations = new Map(); // ticket ID -> confirmation text (this page view only)
+
+function sendReply(ticketIds, customer) {
+  const stamp = noteStamp();
+  ticketIds.forEach(id => {
+    const edit = editFor(id);
+    edit.last_reply_from = "us";
+    edit.last_reply_date = toIsoDate(today); // today is built from year/month/day parts
+    edit.notes = [...(Array.isArray(edit.notes) ? edit.notes : []), { stamp, text: "Reply sent" }];
+    openDrafts.delete(id);
+    sentConfirmations.set(id, `Sent to ${customer} (demo: no email is actually sent)`);
+  });
+  saveAndRender();
+  const card = document.getElementById(`ticket-${ticketIds[0]}`);
+  if (card) card.scrollIntoView({ block: "center" }); // follow the ticket to its new place
 }
 
 function toggleDraft(item, card) {

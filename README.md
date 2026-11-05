@@ -13,7 +13,7 @@ Double-click `index.html`. No install, server or internet needed. Works in Chrom
 - **Summary bar:** replies overdue, deadlines this week, blocked, due today.
 - **Patterns panel:** likely firmware issue, repeat customers, setup help, deadlines in the next 7 days.
 - **Editing:** status dropdown, timestamped notes, "Mark replied" and "Reset to original data".
-- **Draft reply:** template replies that follow the house rules. Unknowns are highlighted [placeholders]; Copy refuses until they are filled in.
+- **Draft reply:** house-rule templates. Send stays disabled until every highlighted [placeholder] is filled, then marks the ticket replied. Send is a demo button. A real version would connect to an email service.
 - **Export CSV:** downloads all 12 tickets with your changes, in the same 11 columns as `tickets.csv`.
 
 ## How the tiers work
@@ -32,7 +32,7 @@ A ticket goes in the tier of its most urgent reason. Ties go to repeat customers
 - Business days are Monday to Friday; weekends are skipped.
 - Maya Okafor's refund request date is her earliest ticket in the data (Sep 28). Her two earlier tickets aren't in the data, so check their dates.
 - T-110 shows "owner not stated in the data"; no owner is invented.
-- Drafts mentioning the software update or a downgrade start with [confirm with engineering before sending] and can't be copied until engineering confirms.
+- Drafts mentioning the software update or a downgrade start with [confirm with engineering before sending] and can't be sent until engineering confirms.
 
 ## Limitation
 
