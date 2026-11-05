@@ -4,35 +4,194 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>LILA Monday Queue</title>
-  <!-- Slice 3: editing and saving. Only basic readability styling; the design comes in a later slice. -->
+  <!-- Slice 4: design. Raleway loads from Google Fonts; if offline, the system sans-serif is used. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Raleway:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    body { font-family: system-ui, sans-serif; margin: 16px; max-width: 900px; line-height: 1.4; }
-    .ticket { border: 1px solid #ccc; padding: 8px 10px; margin: 8px 0; }
-    .case { border-left: 4px solid #999; padding-left: 8px; margin: 12px 0; }
-    .linked { margin-left: 24px; }
-    .muted { color: #666; }
-    .resolved { opacity: 0.5; }
-    .controls { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-    .notice { background: #fff3cd; padding: 4px 8px; }
-    ul { margin: 4px 0; padding-left: 20px; }
+    /* ---- Colours (from CLAUDE.md). Tier colours are kept clear of the brand maroon. ---- */
+    :root {
+      --cream: #FFF8EE;      /* page */
+      --panel: #F4F3EF;      /* alternate panels */
+      --card: #FFFFFF;       /* cards */
+      --maroon: #8B2323;     /* header and primary buttons */
+      --maroon-dark: #6E1B1B;
+      --text: #2A2A2A;
+      --text-2: #6B6B6B;
+      --line: #E4E0D8;
+
+      --t1: #E02424; --t1-ink: #B91C1C; --t1-bg: #FDECEC;  /* Tier 1: strong red */
+      --t2: #F97316; --t2-ink: #C2410C; --t2-bg: #FFF1E6;  /* Tier 2: orange */
+      --t3: #2563EB; --t3-ink: #1D4ED8; --t3-bg: #EAF1FE;  /* Tier 3: blue */
+      --t4: #F5B301; --t4-ink: #8A5A00; --t4-bg: #FFF6DB;  /* Tier 4: amber */
+      --t5: #2F9E5B; --t5-ink: #1E7A44; --t5-bg: #E8F6EE;  /* Tier 5: green */
+      --t6: #A3A3A3; --t6-ink: #6B6B6B; --t6-bg: #EFEFEF;  /* Resolved: grey */
+      --info: #B8B2A7; --info-ink: #6B6B6B;                 /* informational reasons */
+
+      --font: "Raleway", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--cream); color: var(--text); font-family: var(--font); font-weight: 400; line-height: 1.5; }
+    h1, h2 { font-weight: 300; margin: 0; }
+    .muted { color: var(--text-2); }
+    .small { font-size: 13px; }
+
+    /* "Eyebrow" labels: tiny uppercase text with a short dash. */
+    .eyebrow { font-size: 11px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; }
+    .eyebrow::before { content: "— "; }
+
+    /* ---- Header ---- */
+    .site-header { background: var(--maroon); color: #fff; }
+    .header-inner { max-width: 960px; margin: 0 auto; padding: 18px 16px; display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: flex-end; justify-content: space-between; }
+    .site-header h1 { font-size: 28px; letter-spacing: 0.02em; }
+    .site-header .eyebrow { color: rgba(255, 255, 255, 0.8); }
+    .header-controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .date-field { display: flex; flex-direction: column; gap: 2px; }
+    .date-field input { font: inherit; font-size: 14px; padding: 6px 12px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, 0.6); background: #fff; color: var(--text); }
+    #today-label { font-size: 14px; color: rgba(255, 255, 255, 0.9); }
+
+    /* ---- Buttons and chips: rounded pills ---- */
+    .pill { font: inherit; font-size: 14px; font-weight: 500; border-radius: 999px; padding: 7px 16px; cursor: pointer; border: 1px solid var(--maroon); }
+    .pill-primary { background: var(--maroon); color: #fff; }
+    .pill-primary:hover { background: var(--maroon-dark); }
+    .pill-secondary { background: #fff; color: var(--maroon); }
+    .pill-secondary:hover { background: var(--panel); }
+    .pill-ghost-light { background: transparent; color: #fff; border-color: rgba(255, 255, 255, 0.7); }
+    .pill-ghost-light:hover { background: rgba(255, 255, 255, 0.12); }
+    .pill:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--t3); outline-offset: 2px; }
+
+    .chip { display: inline-block; border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+    .chip-tier { border: 1px solid; }
+    .chip-neutral { background: var(--panel); color: var(--text-2); border: 1px solid var(--line); }
+    .chip-flag { background: #fff; color: var(--text); border: 1px solid #CFC8BC; font-size: 10px; padding: 4px 10px; }
+    .chip-flag.flag-manager { border-color: var(--text); }
+
+    /* ---- Page layout ---- */
+    .page { max-width: 960px; margin: 0 auto; padding: 16px; }
+    .notice { background: var(--t4-bg); border: 1px solid var(--t4); color: var(--t4-ink); border-radius: 12px; padding: 8px 14px; margin: 0 0 16px; font-size: 14px; }
+    .panel { background: var(--panel); border-radius: 16px; padding: 14px; }
+
+    /* ---- Summary bar ---- */
+    .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+    .stat { background: var(--card); border-radius: 12px; padding: 10px 14px; border-top: 4px solid; }
+    .stat-number { font-size: 30px; font-weight: 300; line-height: 1.1; }
+    #hidden-note { margin: 10px 0 0; }
+    #hidden-note:empty { display: none; }
+
+    /* ---- Tier sections ---- */
+    .tier-section { margin-top: 28px; }
+    .tier-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; border-bottom: 2px solid; padding-bottom: 6px; margin-bottom: 12px; }
+    .tier-head h2 { font-size: 22px; }
+    .tier-head .count { font-size: 13px; color: var(--text-2); white-space: nowrap; }
+    .empty { color: var(--text-2); font-size: 14px; margin: 6px 0; }
+
+    /* ---- Cards ---- */
+    .card { background: var(--card); border-radius: 16px; padding: 16px; margin: 0 0 12px; border-left: 6px solid; box-shadow: 0 1px 2px rgba(42, 42, 42, 0.06); overflow-wrap: anywhere; }
+    .card.linked { border-left-color: var(--info); }
+    .card.resolved { opacity: 0.55; filter: grayscale(0.6); }
+    .card-top { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; justify-content: space-between; }
+    .card-who { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+    .ticket-id { font-weight: 700; font-size: 16px; }
+    .customer { font-weight: 500; font-size: 16px; }
+    .flags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
+    .reasons { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 8px; }
+    .reason { border-left: 4px solid var(--info); background: #FBFAF7; border-radius: 0 10px 10px 0; padding: 6px 10px; }
+    .reason .eyebrow { display: block; color: var(--info-ink); margin-bottom: 1px; }
+    .reason-text { font-weight: 500; font-size: 15px; }
+    .reason.info .reason-text { font-weight: 400; font-size: 14px; color: var(--text-2); }
+
+    .issue { margin: 12px 0 0; font-size: 15px; color: var(--text); border-left: 2px solid var(--line); padding-left: 10px; font-style: italic; }
+    .details { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 12px 0 0; font-size: 14px; }
+    .details dt { color: var(--text-2); }
+    .details dd { margin: 0; }
+    .notes { margin-top: 12px; font-size: 14px; }
+    .notes .eyebrow { color: var(--text-2); }
+    .notes p { margin: 2px 0 0; }
+    .added-notes { margin: 4px 0 0; padding-left: 18px; }
+    .note-stamp { color: var(--text-2); font-size: 13px; margin-right: 6px; }
+
+    .controls { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .controls select { font: inherit; font-size: 14px; border-radius: 999px; padding: 6px 12px; border: 1px solid #CFC8BC; background: #fff; color: var(--text); max-width: 100%; }
+    .controls label { font-size: 14px; display: inline-flex; gap: 6px; align-items: center; }
+    .note-row { display: flex; gap: 8px; flex: 1 1 260px; min-width: 0; }
+    .note-input { font: inherit; font-size: 14px; flex: 1 1 auto; min-width: 0; border-radius: 999px; padding: 6px 14px; border: 1px solid #CFC8BC; }
+
+    /* ---- Linked cases ---- */
+    .case { background: var(--panel); border-radius: 18px; padding: 12px; margin: 0 0 12px; }
+    .case > .card { margin-bottom: 8px; }
+    .case > .card:last-child { margin-bottom: 0; }
+    .case-head { color: var(--text-2); margin: 0 4px 8px; }
+    .assumption { background: #fff; border: 1px dashed #B8B2A7; border-radius: 12px; padding: 8px 12px; margin: 0 0 10px; font-size: 14px; }
+
+    /* ---- Tier colours: the colour always sits next to a text label ---- */
+    .tier-1 { --tier: var(--t1); --tier-ink: var(--t1-ink); --tier-bg: var(--t1-bg); }
+    .tier-2 { --tier: var(--t2); --tier-ink: var(--t2-ink); --tier-bg: var(--t2-bg); }
+    .tier-3 { --tier: var(--t3); --tier-ink: var(--t3-ink); --tier-bg: var(--t3-bg); }
+    .tier-4 { --tier: var(--t4); --tier-ink: var(--t4-ink); --tier-bg: var(--t4-bg); }
+    .tier-5 { --tier: var(--t5); --tier-ink: var(--t5-ink); --tier-bg: var(--t5-bg); }
+    .tier-6 { --tier: var(--t6); --tier-ink: var(--t6-ink); --tier-bg: var(--t6-bg); }
+    .card[class*="tier-"]:not(.linked) { border-left-color: var(--tier); }
+    .chip-tier { color: var(--tier-ink); background: var(--tier-bg); border-color: var(--tier); }
+    .tier-head { border-bottom-color: var(--tier); }
+    .tier-head .eyebrow { color: var(--tier-ink); }
+    .stat { border-top-color: var(--tier); }
+    .stat .eyebrow { color: var(--tier-ink); }
+    .reason.urgent { border-left-color: var(--tier); background: var(--tier-bg); }
+    .reason.urgent .eyebrow { color: var(--tier-ink); }
+
+    /* ---- Footer (data checks, collapsed) ---- */
+    .site-footer { max-width: 960px; margin: 24px auto 0; padding: 12px 16px 28px; color: var(--text-2); font-size: 13px; }
+    .site-footer summary { cursor: pointer; }
+    .site-footer ul { margin: 6px 0 0; padding-left: 18px; }
+
+    /* ---- Phone width ---- */
+    @media (max-width: 600px) {
+      .site-header h1 { font-size: 22px; }
+      .card { padding: 12px; border-radius: 12px; }
+      .case { padding: 8px; }
+      .tier-head h2 { font-size: 19px; }
+      .stat-number { font-size: 24px; }
+      .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
   </style>
 </head>
 <body>
-  <header>
-    <h1>LILA Monday Queue</h1>
-    <label>
-      Today:
-      <input type="date" id="today-picker">
-    </label>
-    <span id="today-label"></span>
-    <button type="button" id="reset-button">Reset to original data</button>
+  <header class="site-header">
+    <div class="header-inner">
+      <div>
+        <div class="eyebrow">Support queue</div>
+        <h1>LILA Monday Queue</h1>
+      </div>
+      <div class="header-controls">
+        <label class="date-field">
+          <span class="eyebrow">Today</span>
+          <input type="date" id="today-picker">
+        </label>
+        <span id="today-label"></span>
+        <button type="button" id="reset-button" class="pill pill-ghost-light">Reset to original data</button>
+      </div>
+    </div>
   </header>
 
-  <p id="storage-note" class="notice" hidden>Your browser is blocking storage, so changes won't be saved after you close or refresh this page.</p>
-  <p id="data-checks"></p>
-  <p id="hidden-note" class="muted"></p>
+  <div class="page">
+    <p id="storage-note" class="notice" hidden>Your browser is blocking storage, so changes won't be saved after you close or refresh this page.</p>
 
-  <main id="queue"></main>
+    <section class="panel" aria-label="Queue summary">
+      <div class="summary-grid" id="summary"></div>
+      <p id="hidden-note" class="muted small"></p>
+    </section>
+
+    <main id="queue"></main>
+  </div>
+
+  <footer class="site-footer">
+    <details>
+      <summary id="data-checks">Data checks</summary>
+      <ul id="data-checks-list"></ul>
+    </details>
+  </footer>
 
 <script>
 // ---------------------------------------------------------------------------
@@ -247,26 +406,26 @@ const RESOLVED_TIER = 6;
 // Rule 1: every customer gets a reply within 1 business day.
 function replyReasons(ticket, today) {
   const last = parseIsoDate(ticket.last_reply_date);
-  if (!last) return [{ tier: 5, text: "Rule 1: no last reply date in the data" }];
+  if (!last) return [{ kind: "reply-info", tier: 5, text: "Rule 1: no last reply date in the data" }];
   if (dayNumber(last) > dayNumber(today)) {
-    return [{ tier: 5, text: `Rule 1: last reply date (${formatShortDate(last)}) is after today, so it is ignored` }];
+    return [{ kind: "reply-info", tier: 5, text: `Rule 1: last reply date (${formatShortDate(last)}) is after today, so it is ignored` }];
   }
   if (ticket.last_reply_from !== "customer") {
-    return [{ tier: 5, text: `Rule 1: no reply owed (we replied last, ${formatShortDate(last)})` }];
+    return [{ kind: "reply-none", tier: 5, text: `Rule 1: no reply owed (we replied last, ${formatShortDate(last)})` }];
   }
 
   const due = nextBusinessDay(last);
   if (dayNumber(today) < dayNumber(due)) {
-    return [{ tier: 5, text: `Rule 1: reply due ${formatDayDate(due)}` }];
+    return [{ kind: "reply-upcoming", tier: 5, text: `Rule 1: reply due ${formatDayDate(due)}` }];
   }
   if (dayNumber(today) === dayNumber(due)) {
-    return [{ tier: 4, text: `Rule 1: reply due today (${formatShortDate(due)})` }];
+    return [{ kind: "reply-due-today", tier: 4, text: `Rule 1: reply due today (${formatShortDate(due)})` }];
   }
   const late = businessDaysAfter(due, today);
   const text = late === 0
     ? `Rule 1: reply overdue (due ${formatDayDate(due)}); 0 business days late so far because today is a weekend`
     : `Rule 1: reply ${plural(late, "business day")} late (due ${formatShortDate(due)})`;
-  return [{ tier: 2, text, sortValue: -late }];
+  return [{ kind: "reply-overdue", tier: 2, text, sortValue: -late }];
 }
 
 // Rule 2: refunds for 30 days after delivery, judged by the date the customer asked.
@@ -280,7 +439,7 @@ function refundReasons(ticket, caseInfo, today, result) {
 
   if (dayNumber(requested) > dayNumber(windowEnd)) {
     result.needsManager = true;
-    return [{ tier: 5, text: `Rule 2: refund asked for on ${formatShortDate(requested)}, after the 30-day window ended ${formatShortDate(windowEnd)}. Manager decision needed; do not offer a refund.` }];
+    return [{ kind: "refund-manager", tier: 5, text: `Rule 2: refund asked for on ${formatShortDate(requested)}, after the 30-day window ended ${formatShortDate(windowEnd)}. Manager decision needed; do not offer a refund.` }];
   }
 
   const started = ticket.status === "waiting on warehouse" ||
@@ -289,16 +448,16 @@ function refundReasons(ticket, caseInfo, today, result) {
   const eligible = `requested ${formatShortDate(requested)}, inside the window`;
 
   if (started) {
-    return [{ tier: 5, text: `Rule 2: refund eligible (${eligible} ending ${formatShortDate(windowEnd)}); return already started` }];
+    return [{ kind: "refund-info", tier: 5, text: `Rule 2: refund eligible (${eligible} ending ${formatShortDate(windowEnd)}); return already started` }];
   }
   if (daysLeft >= 0 && daysLeft <= 7) {
     const when = daysLeft === 0 ? "ends TODAY" : daysLeft === 1 ? "ends tomorrow" : `ends in ${daysLeft} days`;
-    return [{ tier: 1, text: `Rule 2: refund window ${when} (${formatShortDate(windowEnd)}); ${eligible}, return not started`, sortValue: daysLeft }];
+    return [{ kind: "refund-window", tier: 1, text: `Rule 2: refund window ${when} (${formatShortDate(windowEnd)}); ${eligible}, return not started`, sortValue: daysLeft }];
   }
   if (daysLeft > 7) {
-    return [{ tier: 5, text: `Rule 2: refund eligible; window ends ${formatShortDate(windowEnd)} (${daysLeft} days left), return not started` }];
+    return [{ kind: "refund-info", tier: 5, text: `Rule 2: refund eligible; window ends ${formatShortDate(windowEnd)} (${daysLeft} days left), return not started` }];
   }
-  return [{ tier: 5, text: `Rule 2: refund still eligible (${eligible} that ended ${formatShortDate(windowEnd)}); return not started` }];
+  return [{ kind: "refund-info", tier: 5, text: `Rule 2: refund still eligible (${eligible} that ended ${formatShortDate(windowEnd)}); return not started` }];
 }
 
 // Rule 3: a carrier damage claim must be filed within 14 days of delivery.
@@ -306,7 +465,7 @@ function carrierClaimReasons(ticket, today) {
   const delivered = parseIsoDate(ticket.delivered);
   const isDamage = PATTERNS.damage.test(ticket.issue) || PATTERNS.carrierClaim.test(ticket.notes);
   if (!delivered || !isDamage) return [];
-  if (PATTERNS.claimFiled.test(ticket.notes)) return [{ tier: 5, text: "Rule 3: carrier claim filed" }];
+  if (PATTERNS.claimFiled.test(ticket.notes)) return [{ kind: "claim-filed", tier: 5, text: "Rule 3: carrier claim filed" }];
 
   const deadline = addDays(delivered, 14);
   const daysLeft = daysBetween(today, deadline);
@@ -319,7 +478,7 @@ function carrierClaimReasons(ticket, today) {
   else                     text = `Rule 3: carrier claim deadline PASSED ${-daysLeft} days ago (${date})`;
   text += "; claim not filed yet";
 
-  return daysLeft <= 7 ? [{ tier: 1, text, sortValue: daysLeft }] : [{ tier: 5, text }];
+  return daysLeft <= 7 ? [{ kind: "claim-deadline", tier: 1, text, sortValue: daysLeft }] : [{ kind: "claim-deadline", tier: 5, text }];
 }
 
 // A promised date in the issue text that has passed (not a house rule).
@@ -333,12 +492,12 @@ function promiseReasons(ticket, today) {
   const thing = match[1].trim();
   const promised = makeDate(opened.getFullYear(), month + 1, Number(match[3])); // year taken from the opened date
   if (dayNumber(today) <= dayNumber(promised)) {
-    return [{ tier: 5, text: `Promise: ${thing} promised by ${formatDayDate(promised)} (not passed yet)` }];
+    return [{ kind: "promise", tier: 5, text: `Promise: ${thing} promised by ${formatDayDate(promised)} (not passed yet)` }];
   }
   // Late days start on the first business day after the promise (a Saturday promise counts from Monday).
   const late = businessDaysAfter(promised, today);
   const countedFrom = isBusinessDay(promised) ? "" : ` (counted from ${formatDayDate(nextBusinessDay(promised))})`;
-  return [{ tier: 2, text: `Promise missed: ${thing} promised by ${formatDayDate(promised)}; ${plural(late, "business day")} late${countedFrom}`, sortValue: -late }];
+  return [{ kind: "promise-missed", tier: 2, text: `Promise missed: ${thing} promised by ${formatDayDate(promised)}; ${plural(late, "business day")} late${countedFrom}`, sortValue: -late }];
 }
 
 // Blocked on someone else. Only names an owner when the status states one.
@@ -367,7 +526,7 @@ function blockedReasons(ticket, today) {
   } else {
     text = `Blocked: ${stepMatch[1].toLowerCase()} not ${stepMatch[2].toLowerCase()} (owner not stated in the data). ${duration[0].toUpperCase()}${duration.slice(1)}.`;
   }
-  return [{ tier: 3, text, sortValue: -days }];
+  return [{ kind: "blocked", tier: 3, text, sortValue: -days }];
 }
 
 // Possible firmware issue: firmware 2.4.1 AND stalling words. Never on firmware or amber light alone.
@@ -609,47 +768,143 @@ function el(tag, text, className) {
   return node;
 }
 
+// Eyebrow label shown above each reason, by reason kind.
+const REASON_LABELS = {
+  "reply-overdue": "Reply overdue",
+  "reply-due-today": "Reply due today",
+  "reply-upcoming": "Reply due",
+  "reply-none": "No reply owed",
+  "reply-info": "Reply date",
+  "refund-window": "Refund window closing",
+  "refund-manager": "Refund · manager decision",
+  "refund-info": "Refund",
+  "claim-deadline": "Carrier claim deadline",
+  "claim-filed": "Carrier claim",
+  "promise-missed": "Promise missed",
+  "promise": "Promise",
+  "blocked": "Blocked",
+};
+
+// "Tier 2: Customer let down" -> { short: "Tier 2", long: "Customer let down" }.
+function tierParts(tier) {
+  const [short, long] = TIER_NAMES[tier].split(": ");
+  return { short, long: long || "" };
+}
+
+// "2026-09-30" -> "Sep 30"; anything unreadable is shown as it is.
+function formatDataDate(text) {
+  const date = parseIsoDate(text);
+  return date ? formatShortDate(date) : text;
+}
+
 function renderToday() {
   document.getElementById("today-picker").value = toIsoDate(today);
   document.getElementById("today-label").textContent = formatLongDate(today);
 }
 
-// One ticket: header line, issue, notes, details, flags and reasons.
-function renderTicket(item, isLinked) {
+// Summary bar: counts across all open (not resolved) tickets on screen.
+function renderSummary(cases) {
+  const items = cases.flatMap(group => group.items).filter(item => item.tier !== RESOLVED_TIER);
+  const countWhere = test => items.filter(item => item.reasons.some(test)).length;
+  const stats = [
+    { label: "Replies overdue",     tier: 2, count: countWhere(r => r.kind === "reply-overdue") },
+    { label: "Deadlines this week", tier: 1, count: countWhere(r => r.tier === 1) },
+    { label: "Blocked",             tier: 3, count: countWhere(r => r.kind === "blocked") },
+    { label: "Due today",           tier: 4, count: countWhere(r => r.kind === "reply-due-today") },
+  ];
+  const summary = document.getElementById("summary");
+  summary.replaceChildren();
+  stats.forEach(stat => {
+    const tile = el("div", undefined, `stat tier-${stat.tier}`);
+    tile.dataset.stat = stat.label;
+    tile.append(el("div", String(stat.count), "stat-number"), el("div", stat.label, "eyebrow"));
+    summary.appendChild(tile);
+  });
+}
+
+// One ticket card: ID and customer on top, reasons most prominent, then the
+// issue, details, notes and controls. A linked ticket shows no tier of its
+// own: its case has one tier, shown on the case's lead ticket.
+function renderTicket(item, isLinked, leadId) {
   const t = item.ticket;
   const isResolved = item.tier === RESOLVED_TIER;
-  const box = el("div", undefined, "ticket" + (isLinked ? " linked" : "") + (isResolved ? " resolved" : ""));
-  box.dataset.ticketId = t.ticket_id;
-  box.dataset.tier = item.tier;
+  const card = el("article", undefined, `ticket card tier-${item.tier}` + (isLinked ? " linked" : "") + (isResolved ? " resolved" : ""));
+  card.dataset.ticketId = t.ticket_id;
+  card.dataset.tier = item.tier;
 
-  const title = `${t.ticket_id} · ${t.customer} · ${TIER_NAMES[item.tier]}` + (isLinked ? ` · linked to ${item.linkedIds.join(", ")}` : "");
-  box.appendChild(el("strong", title));
-  box.appendChild(el("div", `Issue: ${t.issue}`));
-  box.appendChild(el("div", `Notes: ${t.notes}`)); // the original CSV note, never changed; blank stays blank
-  if (t.added_notes.length) {
-    const noteList = el("ul", undefined, "added-notes");
-    t.added_notes.forEach(note => noteList.appendChild(el("li", `${note.stamp}: ${note.text}`)));
-    box.appendChild(noteList);
+  // Top line
+  const top = el("div", undefined, "card-top");
+  const who = el("div", undefined, "card-who");
+  who.append(el("span", t.ticket_id, "ticket-id"), el("span", t.customer, "customer"), el("span", t.country, "muted small"));
+  top.appendChild(who);
+  if (isLinked) {
+    top.appendChild(el("span", `Same case as ${leadId}`, "chip chip-neutral"));
+  } else {
+    const parts = tierParts(item.tier);
+    top.appendChild(el("span", parts.long ? `${parts.short} · ${parts.long}` : parts.short, `chip chip-tier tier-${item.tier}`));
   }
-  box.appendChild(el("div",
-    `Status: ${t.status} · opened ${t.opened} · delivered ${t.delivered} · ${t.country} · firmware ${t.firmware} · last reply from ${t.last_reply_from} on ${t.last_reply_date}`,
-    "muted"));
+  card.appendChild(top);
 
+  // Flags (small tags; they do not change the tier)
   const flags = [];
   if (item.isRepeat) {
-    flags.push(item.linkedIds.length ? `Repeat customer (linked: ${item.linkedIds.join(", ")})` : "Repeat customer (notes mention earlier tickets)");
+    flags.push({ text: item.linkedIds.length ? `Repeat customer · ${item.linkedIds.join(", ")}` : "Repeat customer · earlier tickets", cls: "flag-repeat" });
   }
-  if (item.needsManager) flags.push("Needs manager decision");
-  if (item.firmwareIssue) flags.push("Possible firmware issue");
-  if (flags.length) box.appendChild(el("div", `Flags: ${flags.join(" · ")}`));
+  if (item.needsManager) flags.push({ text: "Needs manager decision", cls: "flag-manager" });
+  if (item.firmwareIssue) flags.push({ text: "Possible firmware issue", cls: "flag-firmware" });
+  if (flags.length) {
+    const row = el("div", undefined, "flags");
+    flags.forEach(flag => row.appendChild(el("span", flag.text, `chip chip-flag eyebrow ${flag.cls}`)));
+    card.appendChild(row);
+  }
 
-  box.appendChild(el("div", "Reasons:"));
+  // Reasons: urgent ones (tiers 1-4) in their tier colour, the rest as plain information.
   const list = el("ul", undefined, "reasons");
-  item.reasons.forEach(reason => list.appendChild(el("li", reason.text)));
-  box.appendChild(list);
+  item.reasons.forEach(reason => {
+    const urgent = reason.tier <= 4 && !isResolved;
+    const li = el("li", undefined, `reason tier-${reason.tier} ${urgent ? "urgent" : "info"}`);
+    li.append(el("span", REASON_LABELS[reason.kind] || "Reason", "eyebrow"), el("span", reason.text, "reason-text"));
+    list.appendChild(li);
+  });
+  card.appendChild(list);
 
-  box.appendChild(renderControls(item));
-  return box;
+  // Issue text from the customer
+  card.appendChild(el("p", t.issue, "issue"));
+
+  // Details
+  const details = el("dl", undefined, "details");
+  [
+    ["Status", t.status],
+    ["Opened", formatDataDate(t.opened)],
+    ["Delivered", formatDataDate(t.delivered)],
+    ["Firmware", t.firmware],
+    ["Last reply", `${t.last_reply_from} · ${formatDataDate(t.last_reply_date)}`],
+  ].forEach(([label, value]) => {
+    const pair = el("div");
+    pair.append(el("dt", label, "eyebrow"), el("dd", value));
+    details.appendChild(pair);
+  });
+  card.appendChild(details);
+
+  // Notes: the original CSV note (never changed), then notes added here.
+  if (t.notes || t.added_notes.length) {
+    const notes = el("div", undefined, "notes");
+    notes.appendChild(el("div", "Notes", "eyebrow"));
+    if (t.notes) notes.appendChild(el("p", t.notes, "original-note"));
+    if (t.added_notes.length) {
+      const noteList = el("ul", undefined, "added-notes");
+      t.added_notes.forEach(note => {
+        const li = el("li");
+        li.append(el("span", note.stamp, "note-stamp"), note.text);
+        noteList.appendChild(li);
+      });
+      notes.appendChild(noteList);
+    }
+    card.appendChild(notes);
+  }
+
+  card.appendChild(renderControls(item));
+  return card;
 }
 
 // Status dropdown, Mark replied (with the linked-tickets checkbox) and Add note.
@@ -669,7 +924,7 @@ function renderControls(item) {
   select.addEventListener("change", () => setStatus(id, select.value));
   controls.appendChild(select);
 
-  const replyButton = el("button", "Mark replied", "mark-replied");
+  const replyButton = el("button", "Mark replied", "mark-replied pill pill-primary");
   replyButton.type = "button";
   controls.appendChild(replyButton);
   let alsoLinked = null;
@@ -678,22 +933,24 @@ function renderControls(item) {
     alsoLinked = el("input", undefined, "also-linked");
     alsoLinked.type = "checkbox";
     alsoLinked.checked = true;
-    label.append(alsoLinked, " Also mark linked tickets replied");
+    label.append(alsoLinked, "Also mark linked tickets replied");
     controls.appendChild(label);
   }
   replyButton.addEventListener("click", () => {
     markReplied(alsoLinked && alsoLinked.checked ? [id, ...item.linkedIds] : [id]);
   });
 
+  const noteRow = el("div", undefined, "note-row");
   const noteInput = el("input", undefined, "note-input");
   noteInput.type = "text";
-  noteInput.placeholder = "Add note";
+  noteInput.placeholder = "Add a note";
   noteInput.setAttribute("aria-label", `New note for ${id}`);
-  const noteButton = el("button", "Add note", "add-note");
+  const noteButton = el("button", "Add note", "add-note pill pill-secondary");
   noteButton.type = "button";
   noteButton.addEventListener("click", () => addNote(id, noteInput.value));
   noteInput.addEventListener("keydown", event => { if (event.key === "Enter") addNote(id, noteInput.value); });
-  controls.append(noteInput, noteButton);
+  noteRow.append(noteInput, noteButton);
+  controls.appendChild(noteRow);
 
   return controls;
 }
@@ -703,13 +960,14 @@ function renderCase(group) {
   const items = group.items;
   if (items.length === 1 && !group.caseInfo.needsManager) return renderTicket(items[0], false);
 
+  const leadId = items[0].ticket.ticket_id;
   const wrapper = el("div", undefined, "case");
   wrapper.dataset.caseIds = items.map(i => i.ticket.ticket_id).join(",");
   if (items.length > 1) {
-    wrapper.appendChild(el("div", `Case: ${items[0].ticket.customer} (${items.map(i => i.ticket.ticket_id).join(", ")}), ranked by ${items[0].ticket.ticket_id}`, "muted"));
+    wrapper.appendChild(el("div", `Linked case · ${items[0].ticket.customer} · ${items.map(i => i.ticket.ticket_id).join(", ")}`, "case-head eyebrow"));
   }
-  if (group.caseInfo.needsManager) wrapper.appendChild(el("div", assumptionText(group.caseInfo)));
-  items.forEach((item, index) => wrapper.appendChild(renderTicket(item, index > 0)));
+  if (group.caseInfo.needsManager) wrapper.appendChild(el("div", assumptionText(group.caseInfo), "assumption"));
+  items.forEach((item, index) => wrapper.appendChild(renderTicket(item, index > 0, leadId)));
   return wrapper;
 }
 
@@ -720,11 +978,23 @@ function renderQueue() {
 
   Object.keys(TIER_NAMES).map(Number).forEach(tier => {
     const inTier = cases.filter(group => group.lead.tier === tier);
-    queue.appendChild(el("h2", `${TIER_NAMES[tier]} (${inTier.length})`));
-    if (inTier.length === 0) queue.appendChild(el("p", "None.", "muted"));
-    inTier.forEach(group => queue.appendChild(renderCase(group)));
+    const ticketCount = inTier.reduce((sum, group) => sum + group.items.length, 0);
+    const parts = tierParts(tier);
+
+    const section = el("section", undefined, `tier-section tier-${tier}`);
+    const head = el("div", undefined, "tier-head");
+    const title = el("div");
+    if (parts.long) title.appendChild(el("div", parts.short, "eyebrow"));
+    title.appendChild(el("h2", parts.long || parts.short));
+    head.append(title, el("span", plural(ticketCount, "ticket"), "count"));
+    section.appendChild(head);
+
+    if (inTier.length === 0) section.appendChild(el("p", "Nothing here.", "empty"));
+    inTier.forEach(group => section.appendChild(renderCase(group)));
+    queue.appendChild(section);
   });
 
+  renderSummary(cases);
   document.getElementById("hidden-note").textContent = hiddenCount === 0 ? ""
     : `${plural(hiddenCount, "ticket")} not yet opened`;
 }
@@ -741,7 +1011,8 @@ function renderAll() {
 
 // ---------------------------------------------------------------------------
 // DATA CHECKS
-// Quick checks from CLAUDE.md, shown on the page so they are easy to verify.
+// Quick checks from CLAUDE.md, shown in the collapsed footer. If any check
+// fails, the footer opens by itself so the failure can't be missed.
 // ---------------------------------------------------------------------------
 function runDataChecks() {
   const tickets = originalTickets;
@@ -755,9 +1026,13 @@ function runDataChecks() {
     ["no field says \"undefined\"", tickets.every(t => Object.values(t).every(v => v !== "undefined"))],
   ];
   const failed = checks.filter(([, ok]) => !ok).map(([name]) => name);
-  document.getElementById("data-checks").textContent = failed.length === 0
+  const summary = document.getElementById("data-checks");
+  summary.textContent = failed.length === 0
     ? `Data checks: all ${checks.length} passed.`
     : `Data checks FAILED: ${failed.join("; ")}`;
+  const list = document.getElementById("data-checks-list");
+  list.replaceChildren(...checks.map(([name, ok]) => el("li", `${ok ? "PASS" : "FAIL"}: ${name}`)));
+  if (failed.length) summary.parentElement.open = true;
   checks.forEach(([name, ok]) => console.log(ok ? "PASS" : "FAIL", name));
 }
 
