@@ -1269,19 +1269,17 @@ function buildDraft(group) {
 
   // Missed promise: name exactly what we promised; unknowns stay as placeholders.
   const missedPromise = items.find(i => i.reasons.some(r => r.kind === "promise-missed"));
-  if (missedPromise && !customerWroteLast && !needsManager && !warehouseRefund) {
-    body[body.length - 1] += " I apologize that we missed that promise.";
-  }
   if (missedPromise) {
     const m = PATTERNS.promise.exec(missedPromise.ticket.issue);
-    body.push(`We promised you a ${m[1].trim()} by ${monthName(m[2])} ${Number(m[3])} and have not kept that promise. ` +
+    const apology = !customerWroteLast && !needsManager && !warehouseRefund ? ", and I apologize" : ""; // we wrote last
+    body.push(`We promised you a ${m[1].trim()} by ${monthName(m[2])} ${Number(m[3])} and have not kept that promise${apology}. ` +
       `I'm chasing it today and will confirm [new ship date] and [tracking number] as soon as I have them.`);
     answered = true;
   }
 
   // Damaged in transit (Rule 3): photos, carrier claim (no outcome promised), then the choice.
   if (hasKind("claim-deadline") || hasKind("claim-filed")) {
-    const photos = items.some(i => /\bphotos?\b/i.test(i.ticket.issue)) ? "Thank you for the photos of the damage." : "[confirm we have photos of the damage]";
+    const photos = items.some(i => /\bphotos?\b/i.test(i.ticket.issue)) ? "I can see the photos of the damage." : "[confirm we have photos of the damage]";
     const filing = hasKind("claim-filed") ? "We have filed a damage claim with the carrier" : "We are filing a damage claim with the carrier now";
     // Only offer a refund if the request was inside the Rule 2 window.
     const damaged = items.find(i => parseIsoDate(i.ticket.delivered));
