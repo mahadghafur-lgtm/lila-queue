@@ -34,29 +34,32 @@ Only the manager can make an exception.
 - **Carrier claim deadline (Rule 3):** delivered + 14 calendar days.
 
 ## Priority logic
-Each ticket gets one or more **reasons**. Each reason has a tier. The ticket's tier is its most urgent reason. Every reason is shown on the ticket in plain English and names the rule, e.g. "Rule 3: carrier claim window closes tomorrow (Oct 6)".
+Each ticket gets one or more **reasons**. Each reason has a tier. The ticket's tier is its most urgent reason. Every reason is shown on the ticket in plain English and names the rule (or, for product and customer-service reasons, what the problem is), e.g. "Rule 3: carrier claim window closes tomorrow (Oct 6)".
 
-**Tier 1: Deadline about to expire**
+The tiers (number, name, one-line definition, colour) live in ONE place: the `TIERS` config at the top of the script in `index.html`. Everything else reads from it.
+
+**Tier 1: Time bound**
 - Carrier claim not yet filed and the Rule 3 deadline is within 7 days (or passed).
 - Customer asked for a refund inside the Rule 2 window, the refund or return is not started, and the window ends within 7 days.
-- Sort by days left, fewest first.
-
-**Tier 2: Customer let down**
 - Rule 1 reply is overdue (show how many business days late).
-- A promised date in the issue text has passed (e.g. "promised a replacement by Sep 26").
-- Sort by business days late, most first.
+- Rule 1 reply is due today, but only when the ticket has no Tier 2 or Tier 3 reason (a plain request). "Due today" never outranks a product, customer-service or blocked reason.
+- Sort: deadlines first (fewest days left), then overdue replies (most business days late), then replies due today.
 
-**Tier 3: Blocked on someone else**
-- Status is "waiting on warehouse", "waiting on carrier" or "waiting on engineering", or the notes say an internal step is not done (e.g. "not allocated yet").
+**Tier 2: Product/Customer Service Issue**
+- A promised date in the issue text has passed (e.g. "promised a replacement by Sep 26").
+- Repeated contact: the same customer has more than one ticket, or the notes mention earlier tickets.
+- Possible firmware issue (firmware 2.4.1 AND stalling words, as in the flag below).
+- Setup problem: the issue text mentions setup, connect or Wi-Fi (whole words). An onboarding-call request on its own is not a problem.
+- Sort by business days late on a missed promise, most first; the rest by the tie-breaks.
+
+**Tier 3: External Blockages**
+- Status is "waiting on warehouse", "waiting on carrier", "waiting on engineering" or "escalated to manager", or the notes say an internal step is not done (e.g. "not allocated yet").
 - Name an owner ONLY when the data states one (e.g. the status says "waiting on warehouse"). Never invent an owner. In the sample data only T-105 is blocked on the warehouse.
 - When no owner is stated, say so, e.g. T-110: "Blocked: replacement not allocated (owner not stated in the data)".
 - Sort by how long it has been blocked.
 
-**Tier 4: Reply due today**
-- Rule 1 reply is due today.
-
-**Tier 5: On track**
-- Nothing due.
+**Tier 4: On track**
+- Nothing due and nothing blocked.
 
 **Resolved** tickets go to the bottom, greyed out.
 
@@ -73,7 +76,7 @@ Each ticket gets one or more **reasons**. Each reason has a tier. The ticket's t
 ## Test dates for the priority logic
 Set the date picker to each date and check:
 - **Sat Oct 3:** T-101 is not overdue (weekend replies are due Monday). T-111 (opened Oct 4) is hidden and the note says "1 ticket not yet opened".
-- **Mon Oct 5:** order matches the expected table: T-104, T-108, T-110, T-109/T-101, T-102, T-112, T-105, then the due-today tickets.
+- **Mon Oct 5:** order is T-104, T-108, T-109/T-101, T-102, T-112, T-107, T-111 (Tier 1), then T-110, T-103, T-106 (Tier 2), then T-105 (Tier 3).
 - **Tue Oct 6:** T-104 says the carrier claim closes TODAY.
 - **Wed Oct 7:** T-104 says the carrier claim deadline PASSED yesterday.
 
@@ -102,7 +105,7 @@ Set the date picker to each date and check:
 - Font: Raleway from Google Fonts. Light weight for headings, regular or medium for ticket text. Fall back to system sans-serif if offline.
 - "Eyebrow" labels: tiny uppercase text with a short dash, e.g. "— REPLY OVERDUE".
 - Rounded pill buttons and status chips.
-- Urgency colors must be distinct from the brand maroon: Tier 1 strong red, Tier 2 orange, Tier 3 purple or blue, Tier 4 amber, Tier 5 green. Always pair color with a text label.
+- Urgency colors must be distinct from the brand maroon: Tier 1 strong red, Tier 2 orange, Tier 3 blue, Tier 4 green, Resolved grey (set in the `TIERS` config). Always pair color with a text label.
 - A summary bar at the top with counts: replies overdue, deadlines this week, blocked, due today.
 - Must look good at laptop width and still be usable on a phone.
 

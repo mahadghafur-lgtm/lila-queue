@@ -18,13 +18,12 @@ Double-click `index.html`. No install, server or internet needed. Works in Chrom
 
 ## How the tiers work
 
-1. **Deadline about to expire:** a carrier claim (Rule 3) or refund window (Rule 2) closes within 7 days, or has passed.
-2. **Customer let down:** our reply is overdue (Rule 1), or a promised date has passed.
-3. **Blocked on someone else:** waiting on the warehouse, carrier, engineering or manager, or an internal step isn't done.
-4. **Reply due today.**
-5. **On track.**
+1. **Time bound:** a Rule 2 refund window or Rule 3 carrier claim closes within 7 days, or a reply is overdue or due today (Rule 1).
+2. **Product/Customer Service Issue:** a missed promise, repeated contact, or a firmware or setup fault.
+3. **External Blockages:** waiting on warehouse, carrier, engineering, manager or an unnamed owner.
+4. **On track.**
 
-A ticket goes in the tier of its most urgent reason. Ties go to repeat customers, then the oldest unanswered message. A customer's tickets form one case. Resolved tickets sit at the bottom.
+A ticket goes in the tier of its most urgent reason; "reply due today" never outranks tiers 2 or 3. Ties go to repeat customers, then the oldest unanswered message. A customer's tickets form one case. Resolved tickets sit at the bottom.
 
 ## Assumptions
 
