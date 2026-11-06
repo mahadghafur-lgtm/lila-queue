@@ -1,6 +1,6 @@
 # LILA Monday Queue
 
-A support tool for LILA, the smart kitchen composter, that turns the Monday ticket export into a prioritised queue. It explains each ticket's priority under the four house rules and helps draft replies.
+A support tool for LILA, the smart kitchen composter, that turns the Monday ticket export into a prioritised queue. It explains each ticket's priority and helps draft replies.
 
 ## How to open it
 
@@ -11,10 +11,11 @@ Double-click `index.html`. No install, server or internet needed. Works in Chrom
 - **Priority queue:** each ticket sits in a tier, with plain-English reasons naming the rule.
 - **Date picker:** "today" starts at Mon Oct 5, 2026; change it and the queue re-sorts.
 - **Summary bar:** replies overdue, deadlines this week, blocked, due today.
-- **Patterns panel:** likely firmware issue, repeat customers, setup help, deadlines in the next 7 days.
+- **Patterns panel:** likely firmware issue, repeat customers, setup help, upcoming deadlines.
 - **Editing:** status dropdown, timestamped notes, "Mark replied" and "Reset to original data".
-- **Draft reply:** house-rule templates. Send stays disabled until every highlighted [placeholder] is filled, then marks the ticket replied. Send is a demo button. A real version would connect to an email service.
+- **Draft reply:** Send stays disabled until every [placeholder] is filled. Send is a demo button. A real version would connect to an email service.
 - **Export CSV:** downloads all 12 tickets with your changes, in the same 11 columns as `tickets.csv`.
+- **Collapsible tiers:** click a tier heading, or press Enter or Space, to fold it; this browser remembers.
 
 ## How the tiers work
 
@@ -35,4 +36,4 @@ A ticket goes in the tier of its most urgent reason; "reply due today" never out
 
 ## Limitation
 
-Edits are saved in this browser only (localStorage). They don't reach other devices or colleagues, and clearing site data removes them. Use Export CSV to keep a copy.
+Edits are saved in this browser only (localStorage). They don't sync to other devices, and clearing site data removes them. Use Export CSV to keep a copy.

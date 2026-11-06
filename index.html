@@ -88,6 +88,11 @@
     .tier-head .count { font-size: 13px; color: var(--text-2); white-space: nowrap; }
     .empty { color: var(--text-2); font-size: 14px; margin: 6px 0; }
     .tier-definition { color: var(--text-2); font-size: 13px; margin: -6px 0 12px; }
+    /* Collapsible tiers: <details>/<summary>, same disclosure arrow and click behaviour as the Patterns panel. */
+    .tier-head.tier-toggle { display: list-item; list-style-position: inside; cursor: pointer; }
+    .tier-head.tier-toggle h2 { display: inline; }
+    .tier-head.tier-toggle:focus-visible { outline: 2px solid var(--blue); outline-offset: 4px; }
+    details.tier-section:not([open]) > .tier-head { margin-bottom: 0; }
 
     /* ---- Cards ---- */
     .card { background: var(--card); border-radius: 16px; padding: 16px; margin: 0 0 12px; border-left: 6px solid; box-shadow: 0 1px 2px rgba(42, 42, 42, 0.06); overflow-wrap: anywhere; }
@@ -1162,6 +1167,32 @@ function renderCase(group) {
   return wrapper;
 }
 
+// ---------------------------------------------------------------------------
+// TIER COLLAPSE STATE
+// Which tier sections are collapsed. A view setting, saved under its own key so
+// "Reset to original data" (ticket edits only) and the date picker leave it alone.
+// Keyed by the tier's "key" in TIERS, so renaming or renumbering a tier is safe.
+// ---------------------------------------------------------------------------
+const VIEW_KEY = "lila-queue-view-v1";
+let collapsedTiers = loadCollapsedTiers(); // e.g. { productIssue: true }
+
+function loadCollapsedTiers() {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(VIEW_KEY) || "{}");
+    return saved && typeof saved.collapsed === "object" && saved.collapsed ? saved.collapsed : {};
+  } catch (error) {
+    return {}; // storage blocked or unreadable: every tier starts expanded
+  }
+}
+
+function saveCollapsedTiers() {
+  try {
+    window.localStorage.setItem(VIEW_KEY, JSON.stringify({ collapsed: collapsedTiers }));
+  } catch (error) {
+    // storage blocked: collapsing still works for this page view
+  }
+}
+
 function renderQueue() {
   const { cases, hiddenCount } = buildQueue(currentTickets(), today);
   const queue = document.getElementById("queue");
@@ -1172,13 +1203,33 @@ function renderQueue() {
     const ticketCount = inTier.reduce((sum, group) => sum + group.items.length, 0);
     const parts = tierParts(tier);
 
-    const section = el("section", undefined, `tier-section tier-${tier}`);
-    const head = el("div", undefined, "tier-head");
-    const title = el("div");
-    if (parts.long) title.appendChild(el("div", parts.short, "eyebrow"));
-    title.appendChild(el("h2", parts.long || parts.short));
-    head.append(title, el("span", plural(ticketCount, "ticket"), "count"));
-    section.appendChild(head);
+    const info = tierInfo(tier);
+    const collapsible = info.key !== "resolved"; // the Resolved section stays as it is
+
+    let section;
+    if (collapsible) {
+      // <details>/<summary>: click, Enter and Space toggle it natively.
+      section = el("details", undefined, `tier-section tier-${tier}`);
+      section.open = !collapsedTiers[info.key];
+      const summary = el("summary", undefined, "tier-head tier-toggle");
+      summary.append(el("h2", `${parts.short}: ${parts.long}`), el("span", ` · ${plural(ticketCount, "ticket")}`, "count"));
+      summary.setAttribute("aria-expanded", String(section.open));
+      section.addEventListener("toggle", () => {
+        summary.setAttribute("aria-expanded", String(section.open));
+        if (section.open) delete collapsedTiers[info.key];
+        else collapsedTiers[info.key] = true;
+        saveCollapsedTiers();
+      });
+      section.appendChild(summary);
+    } else {
+      section = el("section", undefined, `tier-section tier-${tier}`);
+      const head = el("div", undefined, "tier-head");
+      const title = el("div");
+      if (parts.long) title.appendChild(el("div", parts.short, "eyebrow"));
+      title.appendChild(el("h2", parts.long || parts.short));
+      head.append(title, el("span", plural(ticketCount, "ticket"), "count"));
+      section.appendChild(head);
+    }
     section.appendChild(el("p", tierInfo(tier).definition, "tier-definition"));
 
     if (inTier.length === 0) section.appendChild(el("p", "Nothing here.", "empty"));
