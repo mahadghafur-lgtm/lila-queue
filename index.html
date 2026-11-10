@@ -911,6 +911,8 @@ function resetToOriginal() {
   if (!window.confirm("Reset to original data? This removes all status changes, notes and replies you added.")) return;
   clearSavedEdits();
   sentConfirmations.clear(); // "Sent to…" messages no longer true once the sends are undone
+  warehouseConfirmations.clear();
+  openWarehouseDrafts.clear();
   openDrafts.clear();
   renderAll();
 }
@@ -1094,6 +1096,8 @@ function renderTicket(item, isLinked, leadId) {
   card.appendChild(renderControls(item));
   if (openDrafts.has(t.ticket_id)) card.appendChild(renderDraftPanel(item)); // keep an open draft open after a re-sort
   if (sentConfirmations.has(t.ticket_id)) card.appendChild(el("p", sentConfirmations.get(t.ticket_id), "sent-confirmation"));
+  if (openWarehouseDrafts.has(t.ticket_id) && t.status === "waiting on warehouse") card.appendChild(renderWarehousePanel(item));
+  if (warehouseConfirmations.has(t.ticket_id)) card.appendChild(el("p", warehouseConfirmations.get(t.ticket_id), "sent-confirmation warehouse-confirmation"));
   return card;
 }
 
@@ -1146,6 +1150,13 @@ function renderControls(item) {
   draftButton.type = "button";
   draftButton.addEventListener("click", () => toggleDraft(item, draftButton.closest(".card")));
   controls.appendChild(draftButton);
+
+  if (item.ticket.status === "waiting on warehouse") {
+    const warehouseButton = el("button", "Email warehouse", "warehouse-email pill pill-secondary");
+    warehouseButton.type = "button";
+    warehouseButton.addEventListener("click", () => toggleWarehouseDraft(item, warehouseButton.closest(".card")));
+    controls.appendChild(warehouseButton);
+  }
 
   return controls;
 }
@@ -1668,6 +1679,94 @@ function toggleDraft(item, card) {
   } else {
     card.appendChild(renderDraftPanel(item));
     openDrafts.add(id);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// EMAIL WAREHOUSE (internal draft, demo Send)
+// Shown only on tickets whose status is "waiting on warehouse". Asks the
+// warehouse to confirm receipt (Rule 4). Nothing is emailed: Send adds a note
+// to the ticket through the normal edit layer. Status, tier and last_reply
+// fields are not touched. A real version would connect to an email service.
+// ---------------------------------------------------------------------------
+const openWarehouseDrafts = new Set();       // ticket IDs with the warehouse draft open
+const warehouseConfirmations = new Map();    // ticket ID -> confirmation text (this page view only)
+
+// The internal email as paragraphs. Ticket ID and customer come from the data;
+// the arrival date comes from the issue text ("reached the warehouse on Sep 26") if present.
+function buildWarehouseDraft(ticket) {
+  const arrived = WAREHOUSE_ARRIVAL.exec(ticket.issue);
+  const arrival = arrived ? `${monthName(arrived[1])} ${Number(arrived[2])}` : "[arrival date from tracking]";
+  return [
+    `To: [warehouse email]\nSubject: Receipt check for returned unit, ticket ${ticket.ticket_id}, ${ticket.customer}`,
+    "Hi warehouse team,",
+    `${ticket.customer} returned their LILA unit for a refund (ticket ${ticket.ticket_id}). Tracking shows it reached you on ${arrival}. ` +
+      "Could you confirm by [reply-by time] whether you have received it, and what condition it is in?",
+    "We can only release the refund after you confirm receipt, so I am holding it until I hear from you.",
+    "Thank you,\n[your name]\nLILA Support",
+  ];
+}
+
+function renderWarehousePanel(item) {
+  const ticket = item.ticket;
+  const panel = el("div", undefined, "draft-panel warehouse-panel");
+  const head = el("div", undefined, "draft-head");
+  head.append(el("span", `Email warehouse · ${ticket.ticket_id} (internal)`, "eyebrow"));
+  panel.appendChild(head);
+
+  const body = el("div", undefined, "draft-body warehouse-body");
+  body.contentEditable = "true";
+  body.setAttribute("role", "textbox");
+  body.setAttribute("aria-multiline", "true");
+  body.setAttribute("aria-label", `Warehouse email for ${ticket.ticket_id}`);
+  buildWarehouseDraft(ticket).forEach(text => body.appendChild(renderDraftParagraph(text)));
+  panel.appendChild(body);
+
+  const actions = el("div", undefined, "draft-actions");
+  const sendButton = el("button", "Send", "warehouse-send pill pill-primary");
+  sendButton.type = "button";
+  const closeButton = el("button", "Close", "warehouse-close pill pill-secondary");
+  closeButton.type = "button";
+  const status = el("span", "", "draft-status");
+
+  // Send stays disabled while any [placeholder] is left. Re-checked on every edit.
+  const refreshSendState = () => {
+    const left = placeholdersLeft(body);
+    sendButton.disabled = left.length > 0;
+    status.textContent = left.length ? `Send is disabled until you fill in: ${left.join(", ")}` : "Ready to send.";
+    status.className = "draft-status " + (left.length ? "blocked" : "muted");
+  };
+  body.addEventListener("input", refreshSendState);
+  refreshSendState();
+
+  sendButton.addEventListener("click", () => {
+    if (placeholdersLeft(body).length) { refreshSendState(); return; } // safety: never send with placeholders
+    sendWarehouseEmail(ticket.ticket_id);
+  });
+  closeButton.addEventListener("click", () => toggleWarehouseDraft(item, panel.closest(".card")));
+  actions.append(sendButton, closeButton, status);
+  panel.appendChild(actions);
+  return panel;
+}
+
+// DEMO SEND: adds a note only. No email, no status / tier / last_reply change.
+function sendWarehouseEmail(ticketId) {
+  const edit = editFor(ticketId);
+  edit.notes = [...(Array.isArray(edit.notes) ? edit.notes : []), { stamp: noteStamp(), text: "Emailed warehouse to confirm receipt" }];
+  openWarehouseDrafts.delete(ticketId);
+  warehouseConfirmations.set(ticketId, "Sent to warehouse (demo: no email is actually sent)");
+  saveAndRender();
+}
+
+function toggleWarehouseDraft(item, card) {
+  const id = item.ticket.ticket_id;
+  const existing = card.querySelector(".warehouse-panel");
+  if (existing) {
+    existing.remove();
+    openWarehouseDrafts.delete(id);
+  } else {
+    card.appendChild(renderWarehousePanel(item));
+    openWarehouseDrafts.add(id);
   }
 }
 
